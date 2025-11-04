@@ -434,6 +434,8 @@ dependencies = [
 name = "emsqrt"
 version = "0.1.0"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
  "emsqrt-core",
  "emsqrt-exec",
  "emsqrt-io",

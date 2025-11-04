@@ -1,0 +1,33 @@
+# Example: Parquet scan pipeline
+# This demonstrates reading from Parquet, transforming, and writing back to Parquet
+
+steps:
+  - op: scan
+    source: "data/input.parquet"  # Automatically detected as Parquet by .parquet extension
+    schema:
+      - name: "id"
+        type: "Int64"
+        nullable: false
+      - name: "name"
+        type: "Utf8"
+        nullable: false
+      - name: "age"
+        type: "Int64"
+        nullable: false
+      - name: "score"
+        type: "Float64"
+        nullable: true
+  
+  - op: filter
+    expr: "score > 85.0"
+  
+  - op: project
+    columns:
+      - "name"
+      - "age"
+      - "score"
+  
+  - op: sink
+    destination: "output/high_scores.parquet"
+    format: "parquet"
+

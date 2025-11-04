@@ -108,6 +108,8 @@ impl Engine {
                         source_uri: source_uri.to_string(),
                         schema,
                         file_position: Arc::new(Mutex::new(0)),
+                        #[cfg(feature = "parquet")]
+                        parquet_reader: Arc::new(Mutex::new(None)),
                     })
                 },
                 "sink" => {
@@ -122,6 +124,8 @@ impl Engine {
                         destination: destination.to_string(),
                         format: format.to_string(),
                         writer_initialized: std::sync::Arc::new(std::sync::Mutex::new(false)),
+                        #[cfg(feature = "parquet")]
+                        parquet_writer: std::sync::Arc::new(std::sync::Mutex::new(None)),
                     })
                 },
                 "filter" => {
@@ -334,11 +338,34 @@ fn xor_hashes(a: Hash256, b: Hash256) -> Hash256 {
 
 // --- placeholder source/sink operators (until real IO is wired) ---
 
+/// Detect file format from URI/path (by extension or explicit format parameter).
+fn detect_file_format(uri: &str, format_param: Option<&str>) -> &'static str {
+    if let Some(fmt) = format_param {
+        // If format param is provided and matches known formats, return static string
+        match fmt {
+            "parquet" | "parq" => return "parquet",
+            "csv" => return "csv",
+            _ => return "csv", // Default fallback
+        }
+    }
+    
+    // Detect by file extension
+    if uri.ends_with(".parquet") || uri.ends_with(".parq") {
+        return "parquet";
+    }
+    
+    // Default to CSV
+    "csv"
+}
+
 struct SourceOp {
     source_uri: String,
     schema: Schema,
-    // Track file position for multi-block reading
+    // Track file position for multi-block reading (CSV)
     file_position: Arc<Mutex<usize>>,
+    // Parquet reader (initialized on first read, reused for subsequent blocks)
+    #[cfg(feature = "parquet")]
+    parquet_reader: Arc<Mutex<Option<emsqrt_io::readers::parquet::ParquetReader>>>,
 }
 
 impl Operator for SourceOp {
@@ -368,7 +395,54 @@ impl Operator for SourceOp {
             &self.source_uri
         };
         
-        // Read CSV file with provided schema
+        // Detect file format
+        let format = detect_file_format(file_path, None);
+        
+        // Handle Parquet files
+        #[cfg(feature = "parquet")]
+        if format == "parquet" {
+            use emsqrt_io::readers::parquet::ParquetReader;
+            
+            let mut reader_guard = self.parquet_reader.lock().unwrap();
+            
+            // Initialize reader on first call
+            if reader_guard.is_none() {
+                // Determine projection from schema if provided
+                let projection = if self.schema.fields.is_empty() {
+                    None // Read all columns
+                } else {
+                    Some(self.schema.fields.iter().map(|f| f.name.clone()).collect())
+                };
+                
+                let reader = ParquetReader::from_path(file_path, projection, 10000)
+                    .map_err(|e| OpError::Exec(format!("failed to create Parquet reader: {}", e)))?;
+                
+                // If schema was not provided, infer from Parquet file
+                // For now, we use the provided schema or the reader's schema
+                *reader_guard = Some(reader);
+            }
+            
+            // Read next batch
+            if let Some(ref mut reader) = *reader_guard {
+                match reader.next_batch() {
+                    Ok(Some(batch)) => return Ok(batch),
+                    Ok(None) => {
+                        // End of file - return empty batch with correct schema
+                        return Ok(RowBatch {
+                            columns: self.schema.fields.iter()
+                                .map(|f| emsqrt_core::types::Column {
+                                    name: f.name.clone(),
+                                    values: Vec::new(),
+                                })
+                                .collect(),
+                        });
+                    }
+                    Err(e) => return Err(OpError::Exec(format!("Parquet read error: {}", e))),
+                }
+            }
+        }
+        
+        // Read CSV file with provided schema (default/fallback)
         use std::fs::File;
         use emsqrt_core::types::{Column, Scalar};
         
@@ -510,6 +584,22 @@ struct SinkOp {
     destination: String,
     format: String,
     writer_initialized: std::sync::Arc<std::sync::Mutex<bool>>,
+    // Parquet writer state (when writing Parquet files)
+    #[cfg(feature = "parquet")]
+    parquet_writer: std::sync::Arc<std::sync::Mutex<Option<emsqrt_io::writers::parquet::ParquetWriter>>>,
+}
+
+#[cfg(feature = "parquet")]
+impl Drop for SinkOp {
+    fn drop(&mut self) {
+        // Ensure Parquet writer is closed when SinkOp is dropped
+        if self.format == "parquet" {
+            let mut writer_guard = self.parquet_writer.lock().unwrap();
+            if let Some(writer) = writer_guard.take() {
+                let _ = writer.close(); // Ignore errors on drop
+            }
+        }
+    }
 }
 
 impl Operator for SinkOp {
@@ -549,6 +639,72 @@ impl Operator for SinkOp {
         } else {
             &self.destination
         };
+        
+        // Write based on format
+        // Handle Parquet format
+        #[cfg(feature = "parquet")]
+        if self.format == "parquet" {
+            use emsqrt_io::arrow_convert::emsqrt_to_arrow_schema;
+            use emsqrt_io::writers::parquet::ParquetWriter;
+            use std::sync::Arc;
+            
+            let mut writer_guard = self.parquet_writer.lock().unwrap();
+            
+            // Initialize writer on first write
+            if writer_guard.is_none() {
+                // Infer schema from first batch
+                if input.columns.is_empty() {
+                    return Err(OpError::Exec("Cannot write Parquet file: empty batch with no schema".into()));
+                }
+                
+                // Build schema from column names and types
+                let fields: Vec<emsqrt_core::schema::Field> = input.columns.iter()
+                    .map(|col| {
+                        // Infer type from first non-null value, default to Utf8
+                        let data_type = col.values.iter()
+                            .find_map(|v| {
+                                match v {
+                                    emsqrt_core::types::Scalar::Null => None,
+                                    emsqrt_core::types::Scalar::Bool(_) => Some(emsqrt_core::schema::DataType::Boolean),
+                                    emsqrt_core::types::Scalar::I32(_) => Some(emsqrt_core::schema::DataType::Int32),
+                                    emsqrt_core::types::Scalar::I64(_) => Some(emsqrt_core::schema::DataType::Int64),
+                                    emsqrt_core::types::Scalar::F32(_) => Some(emsqrt_core::schema::DataType::Float32),
+                                    emsqrt_core::types::Scalar::F64(_) => Some(emsqrt_core::schema::DataType::Float64),
+                                    emsqrt_core::types::Scalar::Str(_) => Some(emsqrt_core::schema::DataType::Utf8),
+                                    emsqrt_core::types::Scalar::Bin(_) => Some(emsqrt_core::schema::DataType::Binary),
+                                }
+                            })
+                            .unwrap_or(emsqrt_core::schema::DataType::Utf8);
+                        
+                        emsqrt_core::schema::Field::new(&col.name, data_type, true)
+                    })
+                    .collect();
+                
+                let schema = emsqrt_core::schema::Schema::new(fields);
+                let writer = ParquetWriter::from_emsqrt_schema(file_path, &schema)
+                    .map_err(|e| OpError::Exec(format!("failed to create Parquet writer: {}", e)))?;
+                
+                *writer_guard = Some(writer);
+            }
+            
+            // Write batch
+            if let Some(ref mut writer) = *writer_guard {
+                // If this is an empty batch after we've written data, close the writer
+                if input.num_rows() == 0 {
+                    // Take the writer and close it
+                    if let Some(w) = writer_guard.take() {
+                        w.close()
+                            .map_err(|e| OpError::Exec(format!("failed to close Parquet writer: {}", e)))?;
+                    }
+                } else {
+                    // Write non-empty batches
+                    writer.write_row_batch(input)
+                        .map_err(|e| OpError::Exec(format!("failed to write Parquet batch: {}", e)))?;
+                }
+            }
+            
+            return Ok(input.clone());
+        }
         
         // Write based on format
         // For CSV, we need to append to the file if it already exists (for multiple blocks)

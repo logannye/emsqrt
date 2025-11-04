@@ -77,19 +77,16 @@ run_test_suite "Error Recovery Tests" "cargo test --test error_recovery_tests --
 echo "======== PHASE 8: OPERATOR TESTS ========"
 run_test_suite "Merge Join Tests" "cargo test --test merge_join_tests --no-default-features"
 run_test_suite "Filter with Expressions Tests" "cargo test --test filter_expression_tests --no-default-features"
+run_test_suite "Grace Hash Join Tests" "cargo test --test grace_hash_join_tests --no-default-features"
 
 # 9. Feature-Specific Tests (conditional)
 echo "======== PHASE 9: FEATURE-SPECIFIC TESTS ========"
 if cargo check --features parquet --no-default-features 2>/dev/null; then
-    run_test_suite "Parquet I/O Tests" "cargo test --test parquet_tests --features parquet --no-default-features 2>/dev/null || echo 'Parquet tests not yet implemented'"
+    run_test_suite "Arrow Conversion Tests" "cargo test --test arrow_conversion_tests --features parquet --no-default-features"
+    run_test_suite "Parquet I/O Tests" "cargo test --test parquet_io_tests --features parquet --no-default-features"
+    run_test_suite "Parquet Pipeline Tests" "cargo test --test integration_tests --features parquet --no-default-features -- test_parquet"
 else
-    echo -e "${YELLOW}Skipping Parquet tests (feature not available)${NC}"
-fi
-
-if cargo check --features arrow --no-default-features 2>/dev/null; then
-    run_test_suite "Arrow Integration Tests" "cargo test --test arrow_tests --features arrow --no-default-features 2>/dev/null || echo 'Arrow tests not yet implemented'"
-else
-    echo -e "${YELLOW}Skipping Arrow tests (feature not available)${NC}"
+    echo -e "${YELLOW}Skipping Parquet/Arrow tests (feature not available)${NC}"
 fi
 
 # 10. CLI Tests

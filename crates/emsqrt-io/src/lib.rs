@@ -15,4 +15,7 @@ pub mod writers;
 
 pub mod error;
 
+#[cfg(feature = "parquet")]
+pub mod arrow_convert;
+
 pub use storage::FsStorage;

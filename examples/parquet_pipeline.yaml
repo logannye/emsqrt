@@ -1,0 +1,34 @@
+# Example: Parquet pipeline - CSV to Parquet conversion
+# This demonstrates reading CSV, filtering, and writing to Parquet format
+
+steps:
+  - op: scan
+    source: "data/input.csv"
+    schema:
+      - name: "id"
+        type: "Int64"
+        nullable: false
+      - name: "name"
+        type: "Utf8"
+        nullable: false
+      - name: "age"
+        type: "Int64"
+        nullable: false
+      - name: "email"
+        type: "Utf8"
+        nullable: false
+  
+  - op: filter
+    expr: "age > 30"
+  
+  - op: project
+    columns:
+      - "id"
+      - "name"
+      - "age"
+      - "email"
+  
+  - op: sink
+    destination: "output/filtered.parquet"
+    format: "parquet"
+

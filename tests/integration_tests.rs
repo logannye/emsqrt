@@ -441,3 +441,180 @@ fn test_multiple_filters() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+
+#[cfg(feature = "parquet")]
+#[test]
+fn test_parquet_scan_filter_project_sink() {
+    use emsqrt_io::readers::parquet::ParquetReader;
+    use emsqrt_io::writers::parquet::ParquetWriter;
+    
+    let temp_dir = create_temp_spill_dir();
+    let input_file = format!("{}/input.parquet", temp_dir);
+    let output_file = format!("{}/output.parquet", temp_dir);
+    
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+    
+    // Create input Parquet file
+    let input_schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("age", DataType::Int64, false),
+        Field::new("email", DataType::Utf8, false),
+    ]);
+    
+    let input_data = RowBatch {
+        columns: vec![
+            Column {
+                name: "id".to_string(),
+                values: (0..100).map(|i| Scalar::I64(i)).collect(),
+            },
+            Column {
+                name: "name".to_string(),
+                values: (0..100).map(|i| Scalar::Str(format!("Person{}", i))).collect(),
+            },
+            Column {
+                name: "age".to_string(),
+                values: (0..100).map(|i| Scalar::I64(20 + (i % 50))).collect(),
+            },
+            Column {
+                name: "email".to_string(),
+                values: (0..100).map(|i| Scalar::Str(format!("person{}@test.com", i))).collect(),
+            },
+        ],
+    };
+    
+    {
+        let mut writer = ParquetWriter::from_emsqrt_schema(&input_file, &input_schema)
+            .expect("Failed to create Parquet writer");
+        writer.write_row_batch(&input_data).expect("Failed to write");
+        writer.close().expect("Failed to close");
+    }
+    
+    // Build pipeline: scan (Parquet) → filter (age > 25) → project (name, email) → sink (Parquet)
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("age", DataType::Int64, false),
+        Field::new("email", DataType::Utf8, false),
+    ]);
+    
+    let scan = L::Scan {
+        source: input_file.clone(),
+        schema: schema.clone(),
+    };
+    
+    let filter = L::Filter {
+        input: Box::new(scan),
+        expr: "age > 25".to_string(),
+    };
+    
+    let project = L::Project {
+        input: Box::new(filter),
+        columns: vec!["name".to_string(), "email".to_string()],
+    };
+    
+    let sink = L::Sink {
+        input: Box::new(project),
+        destination: output_file.clone(),
+        format: "parquet".to_string(),
+    };
+    
+    let optimized = rules::optimize(sink);
+    let phys_prog = lower_to_physical(&optimized);
+    let work = estimate_work(&optimized, None);
+    let te = plan_te(&phys_prog.plan, &work, 16 * 1024 * 1024).expect("TE planning failed");
+    
+    let mut config = EngineConfig::default();
+    config.spill_dir = temp_dir.clone();
+    let mut engine = Engine::new(config);
+    let manifest = engine.run(&phys_prog, &te).expect("Execution failed");
+    
+    assert!(manifest.started_ms <= manifest.finished_ms);
+    
+    // Verify output Parquet file was created
+    assert!(fs::metadata(&output_file).is_ok());
+    
+    // Read and verify output
+    let mut reader = ParquetReader::from_path(&output_file, None, 1000)
+        .expect("Failed to create Parquet reader");
+    
+    let mut total_rows = 0;
+    while let Some(batch) = reader.next_batch().expect("Failed to read") {
+        assert_eq!(batch.columns.len(), 2); // name, email
+        assert_eq!(batch.columns[0].name, "name");
+        assert_eq!(batch.columns[1].name, "email");
+        total_rows += batch.num_rows();
+    }
+    
+    // Should have some rows (age > 25)
+    assert!(total_rows > 0);
+    
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[cfg(feature = "parquet")]
+#[test]
+fn test_csv_to_parquet_conversion() {
+    use emsqrt_io::readers::parquet::ParquetReader;
+    
+    let temp_dir = create_temp_spill_dir();
+    let input_file = format!("{}/input.csv", temp_dir);
+    let output_file = format!("{}/output.parquet", temp_dir);
+    
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+    setup_test_csv(&input_file, 100);
+    
+    // Build pipeline: scan (CSV) → filter → sink (Parquet)
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("age", DataType::Int64, false),
+        Field::new("email", DataType::Utf8, false),
+    ]);
+    
+    let scan = L::Scan {
+        source: input_file.clone(),
+        schema: schema.clone(),
+    };
+    
+    let filter = L::Filter {
+        input: Box::new(scan),
+        expr: "age > 30".to_string(),
+    };
+    
+    let sink = L::Sink {
+        input: Box::new(filter),
+        destination: output_file.clone(),
+        format: "parquet".to_string(),
+    };
+    
+    let optimized = rules::optimize(sink);
+    let phys_prog = lower_to_physical(&optimized);
+    let work = estimate_work(&optimized, None);
+    let te = plan_te(&phys_prog.plan, &work, 16 * 1024 * 1024).expect("TE planning failed");
+    
+    let mut config = EngineConfig::default();
+    config.spill_dir = temp_dir.clone();
+    let mut engine = Engine::new(config);
+    let manifest = engine.run(&phys_prog, &te).expect("Execution failed");
+    
+    assert!(manifest.started_ms <= manifest.finished_ms);
+    
+    // Verify Parquet file was created
+    assert!(fs::metadata(&output_file).is_ok());
+    
+    // Read Parquet file and verify data
+    let mut reader = ParquetReader::from_path(&output_file, None, 1000)
+        .expect("Failed to create Parquet reader");
+    
+    let mut total_rows = 0;
+    while let Some(batch) = reader.next_batch().expect("Failed to read") {
+        assert_eq!(batch.columns.len(), 4); // id, name, age, email
+        total_rows += batch.num_rows();
+    }
+    
+    assert!(total_rows > 0);
+    
+    cleanup_test_file(&input_file);
+    let _ = fs::remove_dir_all(&temp_dir);
+}

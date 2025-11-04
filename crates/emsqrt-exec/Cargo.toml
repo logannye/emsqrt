@@ -13,6 +13,8 @@ path = "src/lib.rs"
 # Enable internal chaos hooks (panic/latency injection).
 failpoints = []
 tracing = ["dep:tracing"]
+# Enable Parquet I/O support
+parquet = ["emsqrt-io/parquet"]
 
 [dependencies]
 emsqrt-core       = { path = "../emsqrt-core",       package = "emsqrt-core" }

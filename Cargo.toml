@@ -28,6 +28,12 @@ emsqrt-operators = { path = "crates/emsqrt-operators" }
 emsqrt-planner = { path = "crates/emsqrt-planner" }
 emsqrt-exec = { path = "crates/emsqrt-exec" }
 serde_json = { workspace = true }
+# Arrow dependencies for tests (when parquet feature enabled)
+arrow-array = { version = "53", optional = true }
+arrow-schema = { version = "53", optional = true }
+
+[features]
+parquet = ["emsqrt-io/parquet", "emsqrt-exec/parquet", "arrow-array", "arrow-schema"]
 
 [workspace.package]
 version = "0.1.0"

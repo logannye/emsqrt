@@ -41,16 +41,18 @@ Note: Each step must have an `op` field that specifies the operator type.
 ## Available Operators
 
 ### Scan
-Read data from a source file.
+Read data from a source file. Supports CSV and Parquet formats (Parquet requires `--features parquet`).
 
 ```yaml
 - op: scan
-  source: "path/to/file.csv"
+  source: "path/to/file.csv"  # or "path/to/file.parquet"
   schema:
     - name: "column_name"
       type: "Int64"  # or Utf8, Float64, Bool, Int32
       nullable: false
 ```
+
+**Parquet Support**: Parquet files are automatically detected by extension (`.parquet`, `.parq`). The engine uses Arrow integration for efficient columnar reading.
 
 ### Filter
 Filter rows based on a predicate expression.
@@ -96,19 +98,35 @@ Rename columns.
 ```
 
 ### Sink
-Write results to a destination.
+Write results to a destination. Supports CSV, JSONL, and Parquet formats (Parquet requires `--features parquet`).
 
 ```yaml
 - op: sink
   destination: "output/result.csv"
-  format: "csv"  # or jsonl
+  format: "csv"  # or "jsonl" or "parquet"
 ```
+
+**Parquet Support**: When writing Parquet files, the engine automatically infers the schema from the first batch and uses Arrow integration for efficient columnar writing.
 
 ## Examples
 
 - **simple_pipeline.yaml**: Basic scan → filter → project → sink
 - **aggregate_pipeline.yaml**: Aggregation with grouping
 - **join_pipeline.yaml**: Join operation between two data sources
+- **parquet_pipeline.yaml**: CSV to Parquet conversion with filtering
+- **parquet_scan_pipeline.yaml**: Read Parquet, transform, write Parquet
+
+### Running Parquet Examples
+
+Parquet examples require the `parquet` feature to be enabled:
+
+```bash
+# Build with Parquet support
+cargo build --release --features parquet
+
+# Run Parquet pipeline
+emsqrt run --pipeline examples/parquet_pipeline.yaml --features parquet
+```
 
 ## Configuration
 

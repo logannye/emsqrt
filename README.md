@@ -14,6 +14,8 @@ EM-√ is an external-memory ETL/log processing engine with **hard peak-RAM guar
 - **External-Memory Operators**: Sort, join, and aggregate operations automatically spill to disk when memory limits are hit.
 - **Tree Evaluation (TE) Scheduling**: Principled execution schedule that decomposes plans into blocks with bounded fan-in to control peak memory.
 - **Cloud-Ready**: Spill segments support local filesystem with checksums and compression. S3 and GCS adapters are planned.
+- **Parquet Support**: Native columnar Parquet I/O with Arrow integration (optional `--features parquet`).
+- **Grace Hash Join**: Automatic partition-based hash join for datasets exceeding memory limits.
 - **Deterministic Execution**: Stable plan hashing for reproducibility and auditability.
 - **Memory-Constrained Environments**: Designed for edge computing, serverless, embedded systems, and containerized deployments.
 
@@ -114,10 +116,12 @@ steps:
   
   - op: sink
     destination: "results/filtered.csv"
-    format: "csv"
+    format: "csv"  # or "parquet" (requires --features parquet)
 ```
 
 **Note**: Currently supports `scan`, `filter`, `project`, `map`, and `sink`. Aggregate and join operators are not yet supported in YAML (use the programmatic API for these operations).
+
+**Parquet Support**: Scan and Sink operators support Parquet format when built with `--features parquet`. Files are automatically detected by extension (`.parquet`, `.parq`) or can be explicitly specified with `format: "parquet"`.
 
 #### CLI Usage
 
@@ -329,23 +333,23 @@ The comprehensive test suite (`scripts/run_all_tests.sh`) includes 10 phases:
 
 ### Currently Implemented
 
-- ✅ **Scan**: Read CSV files with schema inference
+- ✅ **Scan**: Read CSV and Parquet files with schema inference
 - ✅ **Filter**: Predicate filtering (e.g., `age > 25`, `name == "Alice"`)
 - ✅ **Project**: Column selection and renaming
 - ✅ **Map**: Column renaming (e.g., `old_name AS new_name`)
 - ✅ **Sort**: External sort with k-way merge
 - ✅ **Aggregate**: Group-by with COUNT, SUM, AVG, MIN, MAX
-- ✅ **Join**: Hash join and merge join (sorted merge join for pre-sorted inputs)
-- ✅ **Sink**: Write CSV files
+- ✅ **Join**: Hash join (with Grace hash join for large datasets), merge join (sorted merge join for pre-sorted inputs)
+- ✅ **Sink**: Write CSV and Parquet files
 - ✅ **Expression Engine**: Full SQL-like expressions with operator precedence, cross-type arithmetic, and logical operations
 - ✅ **Statistics**: Column statistics (min/max/distinct_count/null_count) for cost estimation and selectivity modeling
+- ✅ **Parquet I/O**: Native columnar read/write with Arrow integration (requires `--features parquet`)
+- ✅ **Arrow Integration**: Columnar processing with RecordBatch ↔ RowBatch conversion utilities
+- ✅ **Grace Hash Join**: Partition-based hash join for very large datasets with automatic spilling
 
 ### Planned Features
 
-- 🔄 **Parquet I/O**: Native columnar read/write
-- 🔄 **Arrow Integration**: Columnar processing with SIMD
 - 🔄 **Cloud Storage**: S3, GCS adapters for spill segments (currently filesystem only)
-- 🔄 **Grace Hash Join**: Partition-based hash join for very large datasets
 
 ## How It Works
 
@@ -435,10 +439,9 @@ emsqrt/
 Contributions are welcome! Areas of particular interest:
 
 - Cloud storage adapters (S3, GCS, Azure) - placeholders exist, need implementation
-- Parquet and Arrow integration
 - Additional operators (window functions, lateral joins)
 - YAML DSL support for aggregate and join operators
-- Performance optimizations
+- Performance optimizations (SIMD in Arrow operations, parallel processing)
 - Documentation improvements
 
 ## Acknowledgments

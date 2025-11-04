@@ -20,7 +20,9 @@ use std::io::{BufReader, Read, Seek};
 #[cfg(feature = "parquet")]
 use std::sync::Arc;
 
+use crate::arrow_convert::record_batch_to_row_batch;
 use crate::error::{Error, Result};
+use emsqrt_core::types::RowBatch;
 
 /// Parquet reader with projection and predicate pushdown support.
 #[cfg(feature = "parquet")]
@@ -112,15 +114,29 @@ impl ParquetReader {
     }
 
 
-    /// Read the next batch of rows.
+    /// Read the next batch of rows as a RecordBatch (low-level Arrow API).
     ///
     /// Returns `None` when all rows have been read.
-    pub fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+    /// This method is kept for advanced use cases that need direct Arrow access.
+    pub fn next_record_batch(&mut self) -> Result<Option<RecordBatch>> {
         // ParquetRecordBatchReader implements Iterator
         self.reader
             .next()
             .transpose()
             .map_err(|e| Error::Other(format!("Failed to read Parquet batch: {}", e)))
+    }
+
+    /// Read the next batch of rows as a RowBatch.
+    ///
+    /// Returns `None` when all rows have been read.
+    pub fn next_batch(&mut self) -> Result<Option<RowBatch>> {
+        match self.next_record_batch()? {
+            Some(record_batch) => {
+                let row_batch = record_batch_to_row_batch(&record_batch)?;
+                Ok(Some(row_batch))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Get the Arrow schema of the Parquet file (after projection).

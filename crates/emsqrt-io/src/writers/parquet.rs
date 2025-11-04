@@ -23,7 +23,10 @@ use std::fs::File;
 #[cfg(feature = "parquet")]
 use std::sync::Arc;
 
+use crate::arrow_convert::{emsqrt_to_arrow_schema, row_batch_to_record_batch};
 use crate::error::{Error, Result};
+use emsqrt_core::schema::Schema as EmsqrtSchema;
+use emsqrt_core::types::RowBatch;
 
 /// Compression codec for Parquet files.
 #[cfg(feature = "parquet")]
@@ -76,6 +79,28 @@ impl ParquetWriter {
         Self::to_path_with_options(path, schema, ParquetCompression::default(), None)
     }
 
+    /// Create a new ParquetWriter from an emsqrt-core Schema.
+    ///
+    /// Converts the emsqrt Schema to Arrow Schema automatically.
+    pub fn from_emsqrt_schema(
+        path: &str,
+        schema: &EmsqrtSchema,
+    ) -> Result<Self> {
+        let arrow_schema = Arc::new(emsqrt_to_arrow_schema(schema));
+        Self::to_path(path, arrow_schema)
+    }
+
+    /// Create a new ParquetWriter from an emsqrt-core Schema with custom options.
+    pub fn from_emsqrt_schema_with_options(
+        path: &str,
+        schema: &EmsqrtSchema,
+        compression: ParquetCompression,
+        row_group_size: Option<usize>,
+    ) -> Result<Self> {
+        let arrow_schema = Arc::new(emsqrt_to_arrow_schema(schema));
+        Self::to_path_with_options(path, arrow_schema, compression, row_group_size)
+    }
+
     /// Create a new ParquetWriter with custom compression and row group size.
     ///
     /// # Arguments
@@ -121,6 +146,14 @@ impl ParquetWriter {
             .write(batch)
             .map_err(|e| Error::Other(format!("Failed to write Parquet batch: {}", e)))?;
         Ok(())
+    }
+
+    /// Write a RowBatch to the Parquet file.
+    ///
+    /// Converts the RowBatch to a RecordBatch using the writer's schema.
+    pub fn write_row_batch(&mut self, batch: &RowBatch) -> Result<()> {
+        let record_batch = row_batch_to_record_batch(batch, self.schema.clone())?;
+        self.write_batch(&record_batch)
     }
 
     /// Close the writer and finalize the Parquet file.
