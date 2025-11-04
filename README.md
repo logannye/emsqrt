@@ -1,4 +1,4 @@
-# EM-√ (EM-Sq): External-Memory ETL Engine
+# EM-√ (EM-Sqrt): External-Memory ETL Engine
 
 **Process any dataset size with a fixed, small memory footprint.**
 
@@ -7,7 +7,7 @@
 
 EM-√ is an external-memory ETL/log processing engine with **hard peak-RAM guarantees**. Unlike traditional systems that "try" to stay within memory limits, EM-√ **enforces** a strict memory cap, enabling you to process arbitrarily large datasets using small memory footprints.
 
-## 🎯 Key Features
+## Key Features
 
 - **Hard Memory Guarantees**: Never exceeds the configured memory cap (e.g., 100MB). All allocations are tracked via RAII guards.
 - **External-Memory Operators**: Sort, join, and aggregate operations automatically spill to disk when memory limits are hit.
@@ -16,7 +16,7 @@ EM-√ is an external-memory ETL/log processing engine with **hard peak-RAM guar
 - **Deterministic Execution**: Stable plan hashing for reproducibility and auditability.
 - **Memory-Constrained Environments**: Designed for edge computing, serverless, embedded systems, and containerized deployments.
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -180,7 +180,7 @@ let config = EngineConfig {
 
 **Value**: 10x cost reduction for memory-bound workloads.
 
-## 🏗️ Architecture
+## Architecture
 
 EM-√ is built as a modular Rust workspace with the following crates:
 
@@ -209,7 +209,7 @@ emsqrt-tests/     - Comprehensive test suite
 - **SpillManager**: Checksummed, compressed segments for external-memory operations
 - **TE Frontier**: Bounded live blocks guarantee peak memory ≤ cap
 
-## ⚙️ Configuration
+## Configuration
 
 ### EngineConfig
 
@@ -253,7 +253,7 @@ EngineConfig::default()
 // spill_dir: "/tmp/emsqrt-spill"
 ```
 
-## 🔧 Building & Testing
+## Building & Testing
 
 ### Build
 
@@ -288,7 +288,7 @@ The project includes:
 - **Integration Tests**: Full pipeline tests (scan, filter, project, sort, aggregate, sink)
 - **E2E Tests**: End-to-end smoke tests
 
-## 📦 Supported Operations
+## Supported Operations
 
 ### Currently Implemented
 
@@ -310,7 +310,7 @@ The project includes:
 - 🔄 **Expression Engine**: Full SQL-like expressions
 - 🔄 **Statistics**: Column statistics for better cost estimation
 
-## 🎓 How It Works
+## How It Works
 
 ### Tree Evaluation (TE)
 
@@ -342,7 +342,7 @@ let guard = budget.try_acquire(bytes, "my-buffer")?;
 
 If `try_acquire` returns `None`, the operator must spill or partition.
 
-## 📈 Performance
+## Performance
 
 ### Benchmarks (Planned)
 
@@ -357,7 +357,7 @@ If `try_acquire` returns `None`, the operator must spill or partition.
 - **Memory**: **Guaranteed** to never exceed cap (unlike other systems)
 - **Scalability**: Can process datasets 100-1000x larger than available RAM
 
-## 🛠️ Development
+## Development
 
 ### Project Structure
 
@@ -392,7 +392,7 @@ emsqrt/
 - Use `thiserror` for error types
 - Use `serde` for serialization
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Areas of particular interest:
 
@@ -402,11 +402,11 @@ Contributions are welcome! Areas of particular interest:
 - Performance optimizations
 - Documentation improvements
 
-## 📄 License
+## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 This project implements Tree Evaluation (TE) scheduling for external-memory query processing, enabling predictable memory usage in constrained environments.
 
