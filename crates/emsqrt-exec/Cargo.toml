@@ -12,7 +12,6 @@ path = "src/lib.rs"
 [features]
 # Enable internal chaos hooks (panic/latency injection).
 failpoints = []
-async-scheduler = ["dep:tokio"]
 tracing = ["dep:tracing"]
 
 [dependencies]
@@ -26,5 +25,5 @@ emsqrt-planner    = { path = "../emsqrt-planner",    package = "emsqrt-planner" 
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["full"], optional = true }
+csv = "1"
 tracing = { version = "0.1", optional = true }

@@ -8,8 +8,26 @@ members = [
     "crates/emsqrt-operators",
     "crates/emsqrt-planner",
     "crates/emsqrt-exec",
-    "crates/tests",
+    "crates/emsqrt-cli",
 ]
+
+[package]
+name = "emsqrt"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/logannye/emsqrt"
+
+[dependencies]
+# Tests will use workspace dependencies
+emsqrt-core = { path = "crates/emsqrt-core" }
+emsqrt-te = { path = "crates/emsqrt-te" }
+emsqrt-mem = { path = "crates/emsqrt-mem" }
+emsqrt-io = { path = "crates/emsqrt-io" }
+emsqrt-operators = { path = "crates/emsqrt-operators" }
+emsqrt-planner = { path = "crates/emsqrt-planner" }
+emsqrt-exec = { path = "crates/emsqrt-exec" }
+serde_json = { workspace = true }
 
 [workspace.package]
 version = "0.1.0"
@@ -48,4 +66,3 @@ codegen-units = 1
 [profile.dev]
 opt-level = 0
 debug = true
-

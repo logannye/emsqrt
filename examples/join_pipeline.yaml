@@ -1,0 +1,29 @@
+# Join pipeline example
+# Demonstrates joining two data sources
+
+# Note: Join pipelines require two separate scan steps
+# This is a simplified example - full join support may require additional YAML syntax
+steps:
+  - op: scan
+    source: "data/orders.csv"
+    schema:
+      - name: "order_id"
+        type: "Int64"
+        nullable: false
+      - name: "customer_id"
+        type: "Int64"
+        nullable: false
+      - name: "total"
+        type: "Float64"
+        nullable: false
+
+  - op: project
+    columns:
+      - "order_id"
+      - "customer_id"
+      - "total"
+
+  - op: sink
+    destination: "output/orders.csv"
+    format: "csv"
+

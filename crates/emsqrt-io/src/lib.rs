@@ -9,7 +9,6 @@
 //! Parquet modules are feature-gated and stubbed unless `--features parquet`.
 
 pub mod buf;
-pub mod memory_storage;
 pub mod readers;
 pub mod storage;
 pub mod writers;
@@ -17,4 +16,3 @@ pub mod writers;
 pub mod error;
 
 pub use storage::FsStorage;
-pub use memory_storage::MemoryStorage;

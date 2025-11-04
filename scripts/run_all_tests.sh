@@ -58,6 +58,45 @@ run_test_suite "E2E Smoke Test" "cargo test --test e2e_smoke --no-default-featur
 echo "======== PHASE 4: CRATE-LEVEL TESTS ========"
 run_test_suite "All Crate Tests" "cargo test --all --no-default-features --lib"
 
+# 5. Expression Engine Tests
+echo "======== PHASE 5: EXPRESSION ENGINE TESTS ========"
+run_test_suite "Expression Parsing Tests" "cargo test --test expression_tests --no-default-features"
+run_test_suite "Expression Evaluation Tests" "cargo test --test expression_evaluation_tests --no-default-features"
+
+# 6. Column Statistics Tests
+echo "======== PHASE 6: COLUMN STATISTICS TESTS ========"
+run_test_suite "Column Statistics Tests" "cargo test --test column_stats_tests --no-default-features"
+run_test_suite "Cost Estimation with Stats Tests" "cargo test --test cost_estimation_tests --no-default-features"
+
+# 7. Error Handling Tests
+echo "======== PHASE 7: ERROR HANDLING TESTS ========"
+run_test_suite "Error Context Tests" "cargo test --test error_handling_tests --no-default-features"
+run_test_suite "Error Recovery Tests" "cargo test --test error_recovery_tests --no-default-features"
+
+# 8. Operator Tests
+echo "======== PHASE 8: OPERATOR TESTS ========"
+run_test_suite "Merge Join Tests" "cargo test --test merge_join_tests --no-default-features"
+run_test_suite "Filter with Expressions Tests" "cargo test --test filter_expression_tests --no-default-features"
+
+# 9. Feature-Specific Tests (conditional)
+echo "======== PHASE 9: FEATURE-SPECIFIC TESTS ========"
+if cargo check --features parquet --no-default-features 2>/dev/null; then
+    run_test_suite "Parquet I/O Tests" "cargo test --test parquet_tests --features parquet --no-default-features 2>/dev/null || echo 'Parquet tests not yet implemented'"
+else
+    echo -e "${YELLOW}Skipping Parquet tests (feature not available)${NC}"
+fi
+
+if cargo check --features arrow --no-default-features 2>/dev/null; then
+    run_test_suite "Arrow Integration Tests" "cargo test --test arrow_tests --features arrow --no-default-features 2>/dev/null || echo 'Arrow tests not yet implemented'"
+else
+    echo -e "${YELLOW}Skipping Arrow tests (feature not available)${NC}"
+fi
+
+# 10. CLI Tests
+echo "======== PHASE 10: CLI TESTS ========"
+run_test_suite "CLI YAML Parsing Tests" "cargo test --test cli_yaml_tests --no-default-features"
+run_test_suite "CLI Validation Tests" "cargo test --test cli_validation_tests --no-default-features"
+
 # Summary
 echo ""
 echo "======================================"

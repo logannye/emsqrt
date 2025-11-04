@@ -4,10 +4,8 @@ use crate::logical::LogicalPlan;
 
 /// Apply a sequence of lightweight rewrites to the logical plan.
 pub fn optimize(plan: LogicalPlan) -> LogicalPlan {
-    // TODO: Re-enable projection pushdown once column dependency analysis is implemented
-    // For now, just return the plan as-is to avoid breaking filters
-    plan
-    // projection_pushdown(plan)
+    // Apply projection pushdown rule
+    projection_pushdown(plan)
 }
 
 /// Simple projection pushdown: Project(Filter(x)) → Filter(Project(x)) when safe.
@@ -18,36 +16,14 @@ fn projection_pushdown(plan: LogicalPlan) -> LogicalPlan {
 
     match plan {
         Project { input, columns } => {
-            match *input {
-                Filter {
-                    input: filter_input,
-                    expr,
-                } => {
-                    // Try to push project below filter
-                    // For now, just check if we should apply the optimization
-                    // In a real implementation, we'd parse the expr to see which columns it uses
-                    // For safety, only push down if we're not dropping columns (keep all)
-
-                    // Recursively optimize the input first
-                    let optimized_input = projection_pushdown(*filter_input);
-
-                    // Reconstruct: keep original order for safety
-                    // TODO: Add proper column dependency analysis
-                    Filter {
-                        input: Box::new(Project {
-                            input: Box::new(optimized_input),
-                            columns,
-                        }),
-                        expr,
-                    }
-                }
-                other => {
-                    // Recursively optimize the input
-                    Project {
-                        input: Box::new(projection_pushdown(other)),
-                        columns,
-                    }
-                }
+            // Don't push Project below Filter - the filter might need columns
+            // that are not in the projection (e.g., "age > 25" needs "age" column
+            // even if the projection only selects "name,email").
+            // TODO: Add proper column dependency analysis to safely push down
+            // only when the filter expression doesn't reference columns outside the projection.
+            Project {
+                input: Box::new(projection_pushdown(*input)),
+                columns,
             }
         }
         Filter { input, expr } => Filter {

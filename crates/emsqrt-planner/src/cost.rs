@@ -3,6 +3,8 @@
 //! We compute a very rough `WorkEstimate` by walking the logical plan. In real
 //! deployments, this should be informed by stats (filesize, row count) and/or
 //! operator-specific models.
+//!
+//! Now enhanced with column statistics for better selectivity estimation.
 
 use emsqrt_core::dag::LogicalPlan;
 use emsqrt_core::schema::Schema;
@@ -18,95 +20,14 @@ pub struct WorkHint {
     pub source_bytes: Vec<(String, u64)>,
 }
 
-/// Estimate filter selectivity based on expression pattern.
-fn estimate_filter_selectivity(expr: &str) -> f64 {
-    // Parse simple patterns to estimate selectivity
-    if expr.contains('=') && !expr.contains("!=") {
-        // Equality: assume moderate selectivity
-        0.1 // 10% of rows pass
-    } else if expr.contains("!=") {
-        // Not-equal: high selectivity
-        0.9 // 90% of rows pass
-    } else if expr.contains('>') || expr.contains('<') {
-        // Range predicates: moderate selectivity
-        0.33 // ~33% of rows pass
-    } else if expr.contains("IS NULL") {
-        // Null checks: low selectivity (most data is not null)
-        0.05 // 5% of rows
-    } else if expr.contains("IS NOT NULL") {
-        // Not null checks: high selectivity
-        0.95 // 95% of rows pass
-    } else {
-        // Default: 50% selectivity for unknown predicates
-        0.5
-    }
-}
-
-/// Estimate join cardinality based on join type and input sizes.
-fn estimate_join_cardinality(left_rows: u64, right_rows: u64, join_type: &emsqrt_core::dag::JoinType) -> u64 {
-    use emsqrt_core::dag::JoinType;
-    
-    match join_type {
-        JoinType::Inner => {
-            // Inner join: assume some correlation, output is fraction of cross product
-            // Heuristic: sqrt(L * R) for many-to-many, min(L,R) for one-to-many
-            let cross_product = (left_rows as f64 * right_rows as f64).sqrt();
-            (cross_product as u64).max(1).min(left_rows.min(right_rows))
-        }
-        JoinType::Left => {
-            // Left join: at least all left rows, possibly more if right has duplicates
-            (left_rows as f64 * 1.2) as u64 // 20% inflation for duplicates
-        }
-        JoinType::Right => {
-            // Right join: at least all right rows
-            (right_rows as f64 * 1.2) as u64
-        }
-        JoinType::Full => {
-            // Full outer: at least max of both sides
-            (left_rows.max(right_rows) as f64 * 1.5) as u64
-        }
-    }
-}
-
-/// Estimate number of groups in an aggregation.
-fn estimate_aggregate_groups(input_rows: u64, num_group_keys: usize) -> u64 {
-    if num_group_keys == 0 {
-        // No group by: single aggregate
-        return 1;
-    }
-    
-    // Heuristic based on number of grouping columns
-    // More columns → more groups, but with diminishing returns
-    let cardinality_factor = match num_group_keys {
-        1 => 0.1,  // Single column: ~10% unique values
-        2 => 0.25, // Two columns: ~25% unique combinations
-        3 => 0.4,  // Three columns: ~40% unique combinations
-        _ => 0.5,  // Many columns: ~50% unique combinations
-    };
-    
-    ((input_rows as f64 * cardinality_factor) as u64).max(1).min(input_rows)
-}
-
 pub fn estimate_work(plan: &LogicalPlan, hints: Option<&WorkHint>) -> WorkEstimate {
     let mut total_rows = 0u64;
     let mut total_bytes = 0u64;
     let mut max_fan_in = 1u32;
 
-    fn schema_size_bytes(schema: &Schema) -> u64 {
-        let mut total = 0u64;
-        for field in &schema.fields {
-            total += match field.data_type {
-                emsqrt_core::schema::DataType::Boolean => 1,
-                emsqrt_core::schema::DataType::Int32 | emsqrt_core::schema::DataType::Float32 => 4,
-                emsqrt_core::schema::DataType::Int64 
-                | emsqrt_core::schema::DataType::Float64 
-                | emsqrt_core::schema::DataType::Date64 => 8,
-                emsqrt_core::schema::DataType::Utf8 => 32, // Average string size estimate
-                emsqrt_core::schema::DataType::Binary => 64, // Average binary size estimate
-                emsqrt_core::schema::DataType::Decimal128 => 16,
-            };
-        }
-        total.max(1) // Minimum 1 byte per row
+    fn schema_size_bytes(_schema: &Schema) -> u64 {
+        // TODO: derive from field types; placeholder per-row byte guess
+        1
     }
 
     fn walk(
@@ -136,24 +57,30 @@ pub fn estimate_work(plan: &LogicalPlan, hints: Option<&WorkHint>) -> WorkEstima
             }
             Filter { input, expr } => {
                 let in_rows = walk(input, hints, acc_rows, acc_bytes, max_fan_in);
-                // Estimate selectivity based on expression type
-                let selectivity = estimate_filter_selectivity(expr);
-                ((in_rows as f64 * selectivity) as u64).max(1)
+                
+                // Try to estimate selectivity using statistics
+                let selectivity = estimate_filter_selectivity(expr, input);
+                let out_rows = ((in_rows as f64) * selectivity) as u64;
+                out_rows.max(1)
             }
             Map { input, .. } | Project { input, .. } => {
                 walk(input, hints, acc_rows, acc_bytes, max_fan_in)
             }
-            Join { left, right, join_type, .. } => {
+            Join { left, right, on, .. } => {
                 *max_fan_in = (*max_fan_in).max(2);
                 let l = walk(left, hints, acc_rows, acc_bytes, max_fan_in);
                 let r = walk(right, hints, acc_rows, acc_bytes, max_fan_in);
-                // Estimate join cardinality based on join type
-                estimate_join_cardinality(l, r, join_type)
+                
+                // Try to estimate join cardinality using statistics
+                let join_card = estimate_join_cardinality(left, right, on, l, r);
+                join_card.max(1)
             }
             Aggregate { input, group_by, .. } => {
                 let in_rows = walk(input, hints, acc_rows, acc_bytes, max_fan_in);
-                // Estimate number of groups based on cardinality
-                estimate_aggregate_groups(in_rows, group_by.len())
+                
+                // Try to estimate groups using statistics
+                let groups = estimate_aggregate_groups(input, group_by, in_rows);
+                groups.max(1)
             }
             Sink { input, .. } => walk(input, hints, acc_rows, acc_bytes, max_fan_in),
         }
@@ -171,4 +98,173 @@ pub fn estimate_work(plan: &LogicalPlan, hints: Option<&WorkHint>) -> WorkEstima
         total_bytes,
         max_fan_in,
     }
+}
+
+/// Estimate filter selectivity (fraction of rows that pass the filter).
+///
+/// Uses column statistics if available, otherwise falls back to heuristics.
+fn estimate_filter_selectivity(expr: &str, input_plan: &LogicalPlan) -> f64 {
+    // Simple heuristic: try to parse the expression and use stats if available
+    // For now, parse simple predicates like "col OP literal"
+    let ops = ["==", "!=", "<=", ">=", "<", ">"];
+    
+    for op in &ops {
+        if let Some(pos) = expr.find(op) {
+            let col_name = expr[..pos].trim();
+            let literal_str = expr[pos + op.len()..].trim();
+            
+            // Try to get schema from input plan
+            if let Some(schema) = get_schema_from_plan(input_plan) {
+                if let Some(stats_opt) = &schema.stats {
+                    if let Some(col_stats) = stats_opt.get(col_name) {
+                        match *op {
+                            "==" => return col_stats.estimate_equality_selectivity(),
+                            "!=" => return 1.0 - col_stats.estimate_equality_selectivity(),
+                            "<" | "<=" | ">" | ">=" => {
+                                // Try to parse literal as Scalar for range estimation
+                                if let Ok(scalar) = parse_literal_as_scalar(literal_str) {
+                                    let (min_val, max_val) = match *op {
+                                        "<" => (None, Some(&scalar)),
+                                        "<=" => (None, Some(&scalar)),
+                                        ">" => (Some(&scalar), None),
+                                        ">=" => (Some(&scalar), None),
+                                        _ => (None, None),
+                                    };
+                                    return col_stats.estimate_range_selectivity(min_val, max_val);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fallback: conservative 50% selectivity
+    0.5
+}
+
+/// Estimate join cardinality (number of output rows).
+///
+/// Uses distinct_count from statistics if available, otherwise uses heuristics.
+fn estimate_join_cardinality(
+    left_plan: &LogicalPlan,
+    right_plan: &LogicalPlan,
+    on: &[(String, String)],
+    left_rows: u64,
+    right_rows: u64,
+) -> u64 {
+    // Get schemas from plans
+    let left_schema = get_schema_from_plan(left_plan);
+    let right_schema = get_schema_from_plan(right_plan);
+    
+    // Try to use distinct_count from statistics
+    if let (Some(left_schema), Some(right_schema)) = (left_schema, right_schema) {
+        if let (Some(left_stats), Some(right_stats)) = (&left_schema.stats, &right_schema.stats) {
+            if let Some((left_col, right_col)) = on.first() {
+                if let (Some(left_col_stats), Some(right_col_stats)) = 
+                    (left_stats.get(left_col), right_stats.get(right_col)) {
+                    
+                    // Use distinct_count if available
+                    let left_distinct = left_col_stats.distinct_count.unwrap_or(left_rows);
+                    let right_distinct = right_col_stats.distinct_count.unwrap_or(right_rows);
+                    
+                    // Estimate: rows * rows / max(distinct_left, distinct_right)
+                    // This is a simplified model assuming uniform distribution
+                    let max_distinct = left_distinct.max(right_distinct);
+                    if max_distinct > 0 {
+                        return (left_rows * right_rows / max_distinct).min(left_rows * right_rows);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fallback: conservative estimate (min of left and right)
+    left_rows.min(right_rows)
+}
+
+/// Estimate number of groups for an aggregate operation.
+///
+/// Uses distinct_count from statistics if available.
+fn estimate_aggregate_groups(
+    input_plan: &LogicalPlan,
+    group_by: &[String],
+    input_rows: u64,
+) -> u64 {
+    if group_by.is_empty() {
+        return 1; // No grouping, single aggregate row
+    }
+    
+    // Get schema from input plan
+    if let Some(schema) = get_schema_from_plan(input_plan) {
+        if let Some(stats) = &schema.stats {
+            // Estimate groups using distinct_count of group_by columns
+            let mut estimated_groups = 1u64;
+            
+            for col_name in group_by {
+                if let Some(col_stats) = stats.get(col_name) {
+                    if let Some(distinct) = col_stats.distinct_count {
+                        estimated_groups *= distinct.max(1);
+                        // Cap at input_rows to avoid overestimation
+                        estimated_groups = estimated_groups.min(input_rows);
+                    }
+                }
+            }
+            
+            if estimated_groups > 1 {
+                return estimated_groups.min(input_rows);
+            }
+        }
+    }
+    
+    // Fallback: assume 10% reduction (conservative)
+    (input_rows / 10).max(1)
+}
+
+/// Helper to extract schema from a LogicalPlan.
+fn get_schema_from_plan(plan: &LogicalPlan) -> Option<&Schema> {
+    use LogicalPlan::*;
+    match plan {
+        Scan { schema, .. } => Some(schema),
+        Filter { input, .. } => get_schema_from_plan(input),
+        Map { input, .. } | Project { input, .. } => get_schema_from_plan(input),
+        Join { left, .. } => get_schema_from_plan(left), // Use left schema as approximation
+        Aggregate { input, .. } => get_schema_from_plan(input),
+        Sink { input, .. } => get_schema_from_plan(input),
+    }
+}
+
+/// Parse a literal string as a Scalar value.
+fn parse_literal_as_scalar(literal: &str) -> Result<emsqrt_core::types::Scalar, String> {
+    use emsqrt_core::types::Scalar;
+    
+    // Try to parse as different types
+    if let Ok(i) = literal.parse::<i32>() {
+        return Ok(Scalar::I32(i));
+    }
+    if let Ok(i) = literal.parse::<i64>() {
+        return Ok(Scalar::I64(i));
+    }
+    if let Ok(f) = literal.parse::<f32>() {
+        return Ok(Scalar::F32(f));
+    }
+    if let Ok(f) = literal.parse::<f64>() {
+        return Ok(Scalar::F64(f));
+    }
+    if let Ok(b) = literal.parse::<bool>() {
+        return Ok(Scalar::Bool(b));
+    }
+    
+    // Try removing quotes for strings
+    let trimmed = literal.trim();
+    if (trimmed.starts_with('"') && trimmed.ends_with('"')) ||
+       (trimmed.starts_with('\'') && trimmed.ends_with('\'')) {
+        let unquoted = &trimmed[1..trimmed.len()-1];
+        return Ok(Scalar::Str(unquoted.to_string()));
+    }
+    
+    // Default to string
+    Ok(Scalar::Str(literal.to_string()))
 }

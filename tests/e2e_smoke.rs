@@ -23,10 +23,10 @@ fn e2e_smoke() {
     writeln!(file, "2023-01-02,bob").unwrap();
     
     // Logical: scan→project→sink
-    let schema = Schema { fields: vec![
+    let schema = Schema::new(vec![
         Field::new("ts", DataType::Utf8, false),
         Field::new("uid", DataType::Utf8, false),
-    ]};
+    ]);
     let lp = L::Scan { source: format!("file://{}", input_file), schema: schema.clone() };
     let lp = L::Project { input: Box::new(lp), columns: vec!["ts".into()] };
     let lp = L::Sink { input: Box::new(lp), destination: format!("file://{}", output_file), format: "csv".into() };

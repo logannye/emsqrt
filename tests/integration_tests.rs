@@ -44,14 +44,12 @@ fn test_scan_filter_project_sink() {
     setup_test_csv(&input_file, 1000);
     
     // Build pipeline: scan → filter (age > 25) → project (name, email) → sink
-    let schema = Schema {
-        fields: vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("name", DataType::Utf8, false),
-            Field::new("age", DataType::Int64, false),
-            Field::new("email", DataType::Utf8, false),
-        ],
-    };
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("age", DataType::Int64, false),
+        Field::new("email", DataType::Utf8, false),
+    ]);
     
     let scan = L::Scan {
         source: format!("file://{}", input_file),
@@ -99,7 +97,12 @@ fn test_scan_filter_project_sink() {
     let output_lines: Vec<&str> = output_content.lines().collect();
     
     // Should have header + filtered rows
-    assert!(output_lines.len() > 1, "Output should have header and data");
+    assert!(
+        output_lines.len() > 1,
+        "Output should have header and data (got {} lines, content: {:?})",
+        output_lines.len(),
+        if output_lines.len() > 0 { output_lines[0] } else { "" }
+    );
     
     // Count how many rows should pass the filter (age > 25)
     // ages cycle from 20 to 69 (20 + i%50), so ages > 25 are 26-69 = 44 out of every 50
@@ -141,12 +144,10 @@ fn test_sort_aggregate_pipeline() {
     drop(file);
     
     // Build pipeline: scan → aggregate (count by category)
-    let schema = Schema {
-        fields: vec![
-            Field::new("category", DataType::Utf8, false),
-            Field::new("amount", DataType::Int64, false),
-        ],
-    };
+    let schema = Schema::new(vec![
+        Field::new("category", DataType::Utf8, false),
+        Field::new("amount", DataType::Int64, false),
+    ]);
     
     let scan = L::Scan {
         source: format!("file://{}", input_file),
@@ -159,10 +160,11 @@ fn test_sort_aggregate_pipeline() {
         aggs: vec![Aggregation::Count],
     };
     
+    let output_file = format!("{}/result.csv", temp_dir);
     let sink = L::Sink {
         input: Box::new(aggregate),
-        destination: "memory://result".to_string(),
-        format: "memory".to_string(),
+        destination: format!("file://{}", output_file),
+        format: "csv".to_string(),
     };
     
     // Execute
@@ -190,12 +192,10 @@ fn test_simple_map_pipeline() {
     fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
     
     // Build a simple in-memory pipeline: scan (memory) → map → sink (memory)
-    let schema = Schema {
-        fields: vec![
-            Field::new("old_name", DataType::Utf8, false),
-            Field::new("value", DataType::Int64, false),
-        ],
-    };
+    let schema = Schema::new(vec![
+        Field::new("old_name", DataType::Utf8, false),
+        Field::new("value", DataType::Int64, false),
+    ]);
     
     // Create test data
     let test_batch = RowBatch {
@@ -214,20 +214,48 @@ fn test_simple_map_pipeline() {
         ],
     };
     
+    // Write test data to file first
+    let input_file = format!("{}/input.csv", temp_dir);
+    let output_file = format!("{}/output.csv", temp_dir);
+    
+    // Helper to format Scalar for CSV
+    fn scalar_to_string(v: &emsqrt_core::types::Scalar) -> String {
+        use emsqrt_core::types::Scalar::*;
+        match v {
+            Null => "".to_string(),
+            Bool(b) => b.to_string(),
+            I32(i) => i.to_string(),
+            I64(i) => i.to_string(),
+            F32(f) => f.to_string(),
+            F64(f) => f.to_string(),
+            Str(s) => s.clone(),
+            Bin(b) => format!("[binary {} bytes]", b.len()),
+        }
+    }
+    
+    // Write CSV header
+    let mut file = fs::File::create(&input_file).expect("Failed to create input file");
+    writeln!(file, "old_name,value").expect("Failed to write header");
+    for (i, old_col) in test_batch.columns[0].values.iter().enumerate() {
+        let value = &test_batch.columns[1].values[i];
+        writeln!(file, "{},{}", scalar_to_string(old_col), scalar_to_string(value)).expect("Failed to write row");
+    }
+    drop(file);
+    
     let scan = L::Scan {
-        source: "memory://input".to_string(),
-        schema,
+        source: format!("file://{}", input_file),
+        schema: schema.clone(),
     };
     
     let map = L::Map {
         input: Box::new(scan),
-        expr: "old_name AS new_name, value".to_string(), // Simple rename expression
+        expr: "old_name AS new_name".to_string(),
     };
     
     let sink = L::Sink {
         input: Box::new(map),
-        destination: "memory://output".to_string(),
-        format: "memory".to_string(),
+        destination: format!("file://{}", output_file),
+        format: "csv".to_string(),
     };
     
     // Execute
@@ -239,11 +267,6 @@ fn test_simple_map_pipeline() {
     let mut config = EngineConfig::default();
     config.spill_dir = temp_dir.clone();
     let mut engine = Engine::new(config);
-    
-    // Pre-populate memory storage with test data
-    let memory_store = engine.memory_store();
-    let batch_json = serde_json::to_vec(&test_batch).expect("Failed to serialize");
-    memory_store.insert("input".to_string(), batch_json);
     
     let manifest = engine.run(&phys_prog, &te).expect("Execution failed");
     
@@ -259,15 +282,13 @@ fn test_project_column_selection() {
     fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
     
     // Create a schema with many columns, project only a subset
-    let schema = Schema {
-        fields: vec![
-            Field::new("col1", DataType::Int64, false),
-            Field::new("col2", DataType::Utf8, false),
-            Field::new("col3", DataType::Float64, false),
-            Field::new("col4", DataType::Int32, false),
-            Field::new("col5", DataType::Utf8, false),
-        ],
-    };
+    let schema = Schema::new(vec![
+        Field::new("col1", DataType::Int64, false),
+        Field::new("col2", DataType::Utf8, false),
+        Field::new("col3", DataType::Float64, false),
+        Field::new("col4", DataType::Int32, false),
+        Field::new("col5", DataType::Utf8, false),
+    ]);
     
     // Create test data
     let test_batch = RowBatch {
@@ -295,20 +316,54 @@ fn test_project_column_selection() {
         ],
     };
     
+    // Write test data to file first
+    let input_file = format!("{}/wide_table.csv", temp_dir);
+    let output_file = format!("{}/narrow_table.csv", temp_dir);
+    
+    // Helper to format Scalar for CSV
+    fn scalar_to_string(v: &emsqrt_core::types::Scalar) -> String {
+        use emsqrt_core::types::Scalar::*;
+        match v {
+            Null => "".to_string(),
+            Bool(b) => b.to_string(),
+            I32(i) => i.to_string(),
+            I64(i) => i.to_string(),
+            F32(f) => f.to_string(),
+            F64(f) => f.to_string(),
+            Str(s) => s.clone(),
+            Bin(b) => format!("[binary {} bytes]", b.len()),
+        }
+    }
+    
+    // Write CSV header
+    let mut file = fs::File::create(&input_file).expect("Failed to create input file");
+    let headers: Vec<&str> = test_batch.columns.iter().map(|c| c.name.as_str()).collect();
+    writeln!(file, "{}", headers.join(",")).expect("Failed to write header");
+    
+    // Write rows
+    let num_rows = test_batch.num_rows();
+    for i in 0..num_rows {
+        let row: Vec<String> = test_batch.columns.iter()
+            .map(|col| scalar_to_string(&col.values[i]))
+            .collect();
+        writeln!(file, "{}", row.join(",")).expect("Failed to write row");
+    }
+    drop(file);
+    
     let scan = L::Scan {
-        source: "memory://wide_table".to_string(),
-        schema,
+        source: format!("file://{}", input_file),
+        schema: schema.clone(),
     };
     
     let project = L::Project {
         input: Box::new(scan),
-        columns: vec!["col2".to_string(), "col4".to_string()],
+        columns: vec!["col1".to_string(), "col3".to_string()],
     };
     
     let sink = L::Sink {
         input: Box::new(project),
-        destination: "memory://narrow_table".to_string(),
-        format: "memory".to_string(),
+        destination: format!("file://{}", output_file),
+        format: "csv".to_string(),
     };
     
     // Execute
@@ -320,11 +375,6 @@ fn test_project_column_selection() {
     let mut config = EngineConfig::default();
     config.spill_dir = temp_dir.clone();
     let mut engine = Engine::new(config);
-    
-    // Pre-populate memory storage with test data
-    let memory_store = engine.memory_store();
-    let batch_json = serde_json::to_vec(&test_batch).expect("Failed to serialize");
-    memory_store.insert("wide_table".to_string(), batch_json);
     
     let manifest = engine.run(&phys_prog, &te).expect("Execution failed");
     
@@ -350,12 +400,10 @@ fn test_multiple_filters() {
     }
     drop(file);
     
-    let schema = Schema {
-        fields: vec![
-            Field::new("score", DataType::Int64, false),
-            Field::new("status", DataType::Utf8, false),
-        ],
-    };
+    let schema = Schema::new(vec![
+        Field::new("score", DataType::Int64, false),
+        Field::new("status", DataType::Utf8, false),
+    ]);
     
     let scan = L::Scan {
         source: format!("file://{}", input_file),
@@ -373,8 +421,8 @@ fn test_multiple_filters() {
     
     let sink = L::Sink {
         input: Box::new(filter1),
-        destination: "memory://filtered".to_string(),
-        format: "memory".to_string(),
+        destination: format!("file://{}/filtered.csv", temp_dir),
+        format: "csv".to_string(),
     };
     
     let optimized = rules::optimize(sink);

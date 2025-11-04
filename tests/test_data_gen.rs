@@ -37,12 +37,10 @@ pub fn generate_random_batch(rows: usize, schema: &Schema) -> RowBatch {
 
 /// Generate a RowBatch that is already sorted by the specified column
 pub fn generate_sorted_batch(rows: usize, sort_col: &str, dtype: DataType) -> RowBatch {
-    let schema = Schema {
-        fields: vec![
-            Field::new(sort_col, dtype.clone(), false),
-            Field::new("data", DataType::Utf8, false),
-        ],
-    };
+    let _schema = Schema::new(vec![
+        Field::new(sort_col, dtype.clone(), false),
+        Field::new("data", DataType::Utf8, false),
+    ]);
     
     let mut sort_values = Vec::with_capacity(rows);
     let mut data_values = Vec::with_capacity(rows);

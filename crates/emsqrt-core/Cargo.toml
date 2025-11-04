@@ -12,8 +12,8 @@ name = "emsqrt_core"
 path = "src/lib.rs"
 
 [features]
-# In the future you can gate Arrow/Parquet integration here (keep core lean).
-# arrow = []
+# Arrow integration for columnar processing
+arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:arrow-data"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -21,6 +21,10 @@ serde_json = "1"
 thiserror = "1"
 blake3 = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
+# Arrow dependencies (feature-gated)
+arrow-array = { version = "53", optional = true }
+arrow-schema = { version = "53", optional = true }
+arrow-data = { version = "53", optional = true }
 # Keep deps minimal; no async/runtime/IO in core.
 
 [dev-dependencies]

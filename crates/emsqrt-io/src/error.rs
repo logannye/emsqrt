@@ -22,4 +22,7 @@ pub enum Error {
 
     #[error("not implemented: {0}")]
     Unimplemented(&'static str),
+
+    #[error("other error: {0}")]
+    Other(String),
 }

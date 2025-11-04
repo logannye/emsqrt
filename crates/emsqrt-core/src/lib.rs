@@ -18,11 +18,16 @@ pub mod budget;
 pub mod config;
 pub mod dag;
 pub mod error;
+pub mod expr;
 pub mod hash;
 pub mod id;
 pub mod manifest;
 pub mod prelude;
 pub mod schema;
+pub mod stats;
 pub mod types;
+
+#[cfg(feature = "arrow")]
+pub mod arrow;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

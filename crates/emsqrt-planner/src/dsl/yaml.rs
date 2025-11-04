@@ -69,8 +69,8 @@ fn parse_dtype(s: &str) -> DataType {
 }
 
 fn to_schema(fields: &[FieldDef]) -> Schema {
-    Schema {
-        fields: fields
+    Schema::new(
+        fields
             .iter()
             .map(|f| Field {
                 name: f.name.clone(),
@@ -78,7 +78,7 @@ fn to_schema(fields: &[FieldDef]) -> Schema {
                 nullable: f.nullable,
             })
             .collect(),
-    }
+    )
 }
 
 /// Parse YAML string into a `LogicalPlan`.

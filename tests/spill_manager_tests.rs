@@ -26,13 +26,11 @@ fn test_spill_write_read_cycle() {
     let budget = MemoryBudgetImpl::new(10 * 1024 * 1024); // 10MB budget
     
     // Generate test data
-    let schema = Schema {
-        fields: vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("name", DataType::Utf8, false),
-            Field::new("value", DataType::Float64, false),
-        ],
-    };
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("value", DataType::Float64, false),
+    ]);
     let original_batch = generate_random_batch(100, &schema);
     
     // Write batch to spill
@@ -71,9 +69,9 @@ fn test_spill_checksum_validation() {
     let (mut mgr, spill_dir) = setup_spill_manager(Codec::None);
     let budget = MemoryBudgetImpl::new(10 * 1024 * 1024);
     
-    let schema = Schema {
-        fields: vec![Field::new("data", DataType::Int64, false)],
-    };
+    let schema = Schema::new(vec![
+        Field::new("data", DataType::Int64, false)
+    ]);
     let batch = generate_random_batch(50, &schema);
     
     // Write batch
@@ -110,9 +108,9 @@ fn test_spill_multiple_segments() {
     let (mut mgr, spill_dir) = setup_spill_manager(Codec::None);
     let budget = MemoryBudgetImpl::new(20 * 1024 * 1024);
     
-    let schema = Schema {
-        fields: vec![Field::new("seq", DataType::Int64, false)],
-    };
+    let schema = Schema::new(vec![
+        Field::new("seq", DataType::Int64, false)
+    ]);
     
     let num_segments = 10;
     let mut metas = Vec::new();
@@ -158,12 +156,10 @@ fn test_spill_multiple_segments() {
 fn test_spill_compression() {
     // Test with no compression
     let (mut mgr_none, spill_dir_none) = setup_spill_manager(Codec::None);
-    let schema = Schema {
-        fields: vec![
-            Field::new("repeated", DataType::Utf8, false),
-            Field::new("id", DataType::Int64, false),
-        ],
-    };
+    let schema = Schema::new(vec![
+        Field::new("repeated", DataType::Utf8, false),
+        Field::new("id", DataType::Int64, false),
+    ]);
     
     // Create highly compressible data
     let mut batch = generate_random_batch(1000, &schema);
@@ -202,9 +198,9 @@ fn test_spill_compression() {
 fn test_spill_budget_enforcement() {
     let (mut mgr, spill_dir) = setup_spill_manager(Codec::None);
     
-    let schema = Schema {
-        fields: vec![Field::new("big_data", DataType::Utf8, false)],
-    };
+    let schema = Schema::new(vec![
+        Field::new("big_data", DataType::Utf8, false),
+    ]);
     let batch = generate_random_batch(1000, &schema);
     
     let spill_id = SpillId::new(5555);
@@ -227,12 +223,10 @@ fn test_spill_budget_enforcement() {
 fn test_spill_segment_metadata() {
     let (mut mgr, spill_dir) = setup_spill_manager(Codec::None);
     
-    let schema = Schema {
-        fields: vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Utf8, false),
-        ],
-    };
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, false),
+    ]);
     let batch = generate_random_batch(250, &schema);
     
     let spill_id = SpillId::new(3333);
@@ -264,9 +258,9 @@ fn test_spill_segment_metadata() {
 fn test_spill_delete_segment() {
     let (mut mgr, spill_dir) = setup_spill_manager(Codec::None);
     
-    let schema = Schema {
-        fields: vec![Field::new("x", DataType::Int64, false)],
-    };
+    let schema = Schema::new(vec![
+        Field::new("x", DataType::Int64, false)
+    ]);
     let batch = generate_random_batch(100, &schema);
     
     let spill_id = SpillId::new(8888);

@@ -1,0 +1,33 @@
+# Simple ETL pipeline example for EM-√
+# This demonstrates a basic scan → filter → project → sink pipeline
+
+steps:
+  - op: scan
+    source: "data/input.csv"
+    schema:
+      - name: "id"
+        type: "Int64"
+        nullable: false
+      - name: "name"
+        type: "Utf8"
+        nullable: false
+      - name: "age"
+        type: "Int32"
+        nullable: true
+      - name: "active"
+        type: "Bool"
+        nullable: false
+
+  - op: filter
+    expr: "age > 18"
+
+  - op: project
+    columns:
+      - "id"
+      - "name"
+      - "age"
+
+  - op: sink
+    destination: "output/filtered.csv"
+    format: "csv"
+

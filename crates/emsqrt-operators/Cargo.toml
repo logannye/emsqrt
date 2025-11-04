@@ -15,3 +15,10 @@ emsqrt-mem  = { path = "../emsqrt-mem",  package = "emsqrt-mem" }
 
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
+
+# Arrow compute for fast paths (feature-gated)
+arrow-array = { version = "53", optional = true }
+arrow-schema = { version = "53", optional = true }
+
+[features]
+arrow = ["dep:arrow-array", "dep:arrow-schema", "emsqrt-core/arrow"]

@@ -49,7 +49,7 @@ pub fn lower_to_physical(lp: &LogicalPlan) -> PhysicalProgram {
     ) -> PhysicalPlan {
         use LogicalPlan::*;
         match lp {
-            Scan { schema, source } => {
+            Scan { source, schema } => {
                 let op = alloc_id(next_id);
                 bindings.insert(
                     op,
@@ -57,7 +57,7 @@ pub fn lower_to_physical(lp: &LogicalPlan) -> PhysicalProgram {
                         key: "source".to_string(),
                         config: serde_json::json!({
                             "source": source,
-                            "schema": schema,
+                            "schema": serde_json::to_value(&schema).unwrap_or(serde_json::json!({}))
                         }),
                     },
                 );
@@ -117,13 +117,25 @@ pub fn lower_to_physical(lp: &LogicalPlan) -> PhysicalProgram {
             Aggregate { input, group_by, aggs } => {
                 let child = lower_rec(input, next_id, bindings);
                 let op = alloc_id(next_id);
+                
+                // Serialize aggs to strings (format expected by Aggregate::parse)
+                let aggs_str: Vec<String> = aggs.iter().map(|a| {
+                    match a {
+                        emsqrt_core::dag::Aggregation::Count => "count".to_string(),
+                        emsqrt_core::dag::Aggregation::Sum(col) => format!("sum:{}", col),
+                        emsqrt_core::dag::Aggregation::Avg(col) => format!("avg:{}", col),
+                        emsqrt_core::dag::Aggregation::Min(col) => format!("min:{}", col),
+                        emsqrt_core::dag::Aggregation::Max(col) => format!("max:{}", col),
+                    }
+                }).collect();
+                
                 bindings.insert(
                     op,
                     OperatorBinding {
                         key: "aggregate".to_string(),
                         config: serde_json::json!({
                             "group_by": group_by,
-                            "aggs": aggs,
+                            "aggs": aggs_str
                         }),
                     },
                 );
@@ -151,11 +163,7 @@ pub fn lower_to_physical(lp: &LogicalPlan) -> PhysicalProgram {
                     schema: schema_of(lp),
                 }
             }
-            Sink {
-                input,
-                destination,
-                format,
-            } => {
+            Sink { input, destination, format } => {
                 let child = lower_rec(input, next_id, bindings);
                 let op = alloc_id(next_id);
                 bindings.insert(
@@ -164,7 +172,7 @@ pub fn lower_to_physical(lp: &LogicalPlan) -> PhysicalProgram {
                         key: "sink".to_string(),
                         config: serde_json::json!({
                             "destination": destination,
-                            "format": format,
+                            "format": format
                         }),
                     },
                 );

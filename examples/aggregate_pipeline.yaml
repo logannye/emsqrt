@@ -1,0 +1,32 @@
+# Aggregation pipeline example
+# Demonstrates grouping and aggregation operations
+
+steps:
+  - op: scan
+    source: "data/sales.csv"
+    schema:
+      - name: "date"
+        type: "Utf8"
+        nullable: false
+      - name: "product"
+        type: "Utf8"
+        nullable: false
+      - name: "quantity"
+        type: "Int64"
+        nullable: false
+      - name: "price"
+        type: "Float64"
+        nullable: false
+
+  - op: aggregate
+    group_by:
+      - "product"
+    aggs:
+      - "SUM(quantity)"
+      - "SUM(price)"
+      - "COUNT(*)"
+
+  - op: sink
+    destination: "output/sales_summary.csv"
+    format: "csv"
+

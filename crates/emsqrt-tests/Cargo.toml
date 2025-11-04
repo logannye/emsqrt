@@ -1,0 +1,21 @@
+[package]
+name = "emsqrt-tests"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Comprehensive test suite for EM-√"
+
+[lib]
+name = "emsqrt_tests"
+path = "src/lib.rs"
+
+[dependencies]
+emsqrt-core = { path = "../emsqrt-core", package = "emsqrt-core" }
+emsqrt-te = { path = "../emsqrt-te", package = "emsqrt-te" }
+emsqrt-mem = { path = "../emsqrt-mem", package = "emsqrt-mem" }
+emsqrt-io = { path = "../emsqrt-io", package = "emsqrt-io" }
+emsqrt-operators = { path = "../emsqrt-operators", package = "emsqrt-operators" }
+emsqrt-planner = { path = "../emsqrt-planner", package = "emsqrt-planner" }
+emsqrt-exec = { path = "../emsqrt-exec", package = "emsqrt-exec" }
+emsqrt-cli = { path = "../emsqrt-cli", package = "emsqrt-cli" }
+

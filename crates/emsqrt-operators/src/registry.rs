@@ -26,7 +26,7 @@ impl Registry {
         r.register("aggregate", || Box::new(Aggregate::default()));
         r.register("sort_external", || Box::new(crate::sort::external::ExternalSort::default()));
         r.register("join_hash", || Box::new(crate::join::hash::HashJoin::default()));
-        // r.register("join_merge", || Box::new(join::merge::MergeJoin::default()));
+        r.register("join_merge", || Box::new(crate::join::merge::MergeJoin::default()));
         r
     }
 

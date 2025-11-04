@@ -28,9 +28,9 @@ serde_json = "1"
 csv = "1"
 
 # Only when parquet feature is enabled
-parquet = { version = "52", optional = true }
-arrow-schema = { version = "52", optional = true }
-arrow-array = { version = "52", optional = true }
+parquet = { version = "53", optional = true }
+arrow-schema = { version = "53", optional = true }
+arrow-array = { version = "53", optional = true }
 
 # Utility
 blake3 = "1"

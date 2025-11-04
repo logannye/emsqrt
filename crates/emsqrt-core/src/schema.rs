@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::stats::SchemaStats;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DataType {
     Boolean,
@@ -36,14 +38,31 @@ impl Field {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Schema {
     pub fields: Vec<Field>,
+    /// Optional column statistics for cost estimation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<SchemaStats>,
+}
+
+impl PartialEq for Schema {
+    fn eq(&self, other: &Self) -> bool {
+        self.fields == other.fields
+        // Note: stats are not compared for equality (HashMap + floats make this complex)
+    }
 }
 
 impl Schema {
     pub fn new(fields: Vec<Field>) -> Self {
-        Self { fields }
+        Self {
+            fields,
+            stats: None,
+        }
+    }
+
+    pub fn new_with_stats(fields: Vec<Field>, stats: Option<SchemaStats>) -> Self {
+        Self { fields, stats }
     }
 
     pub fn field(&self, idx: usize) -> Option<&Field> {

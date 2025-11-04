@@ -29,6 +29,59 @@ pub enum OpError {
 
     #[error("schema error: {0}")]
     Schema(String),
+
+    /// Recoverable error that can be retried (e.g., transient I/O failures)
+    #[error("recoverable error: {0}")]
+    Recoverable(String),
+}
+
+impl OpError {
+    /// Add context to an error, creating an error chain.
+    pub fn with_context(self, context: impl Into<String>) -> Self {
+        let ctx = context.into();
+        match self {
+            OpError::Plan(msg) => OpError::Plan(format!("{}: {}", ctx, msg)),
+            OpError::Exec(msg) => OpError::Exec(format!("{}: {}", ctx, msg)),
+            OpError::Schema(msg) => OpError::Schema(format!("{}: {}", ctx, msg)),
+            OpError::Recoverable(msg) => OpError::Recoverable(format!("{}: {}", ctx, msg)),
+        }
+    }
+
+    /// Check if this error is recoverable (can be retried).
+    pub fn is_recoverable(&self) -> bool {
+        matches!(self, OpError::Recoverable(_))
+    }
+
+    /// Get suggestions for common errors.
+    pub fn suggestions(&self) -> Vec<String> {
+        match self {
+            OpError::Schema(msg) => {
+                if msg.contains("unknown column") || msg.contains("column") {
+                    vec!["Check that the column name is spelled correctly".into(),
+                         "Verify the column exists in the input schema".into(),
+                         "Use 'AS' to rename columns if needed".into()]
+                } else {
+                    vec![]
+                }
+            }
+            OpError::Exec(msg) => {
+                if msg.contains("parse") || msg.contains("expression") {
+                    vec!["Check expression syntax".into(),
+                         "Verify column names and literal values".into()]
+                } else if msg.contains("memory") || msg.contains("budget") {
+                    vec!["Try increasing memory cap".into(),
+                         "Consider using external sort or hash join".into()]
+                } else {
+                    vec![]
+                }
+            }
+            OpError::Recoverable(msg) => {
+                vec!["This error may be transient - retrying may help".into(),
+                     "Check network connectivity if using remote storage".into()]
+            }
+            _ => vec![],
+        }
+    }
 }
 
 /// Trait that all operators must implement.

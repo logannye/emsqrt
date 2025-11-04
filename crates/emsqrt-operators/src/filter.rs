@@ -1,7 +1,19 @@
-//! Filter operator with simple predicate evaluation.
+//! Filter operator with predicate evaluation.
 //!
-//! Supports expressions of the form: "col OP literal" where OP ∈ {==, !=, <, <=, >, >=}
+//! Supports SQL-like expressions using the expression engine.
+//! Simple predicates: "col OP literal" where OP ∈ {==, !=, <, <=, >, >=}
+//! Complex predicates: "col1 > 10 AND col2 == 'active'"
+//!
+//! When the `arrow` feature is enabled, uses Arrow compute kernels for better performance.
 
+#[cfg(feature = "arrow")]
+use arrow_array::{Array, BooleanArray, RecordBatch};
+#[cfg(feature = "arrow")]
+use arrow_schema::SchemaRef;
+#[cfg(feature = "arrow")]
+use std::sync::Arc;
+
+use emsqrt_core::expr::Expr;
 use emsqrt_core::prelude::Schema;
 use emsqrt_core::types::{Column, RowBatch, Scalar};
 
@@ -10,7 +22,7 @@ use crate::traits::{MemoryBudget, OpError, Operator};
 
 #[derive(Default)]
 pub struct Filter {
-    /// Simple predicate expression: "column op literal"
+    /// Predicate expression string (parsed into Expr on demand)
     pub expr: Option<String>,
 }
 
@@ -45,26 +57,30 @@ impl Operator for Filter {
             .ok_or_else(|| OpError::Exec("missing input".into()))?;
 
         // If no expression, pass through
-        let Some(ref expr) = self.expr else {
+        let Some(ref expr_str) = self.expr else {
             return Ok(input.clone());
         };
 
-        // Parse simple expression: "col op literal"
-        let (col_name, op, literal) = parse_simple_predicate(expr)?;
+        // Parse expression string into Expr AST
+        let expr = Expr::parse(expr_str)
+            .map_err(|e| OpError::Exec(format!("failed to parse expression '{}': {}", expr_str, e)))?;
 
-        // Find the column
-        let col_idx = input
-            .columns
-            .iter()
-            .position(|c| c.name == col_name)
-            .ok_or_else(|| OpError::Exec(format!("column '{}' not found", col_name)))?;
-
-        let col = &input.columns[col_idx];
-
-        // Evaluate predicate for each row
-        let mut keep = Vec::with_capacity(col.values.len());
-        for val in &col.values {
-            keep.push(eval_predicate(val, &op, &literal)?);
+        // Evaluate expression for each row
+        let num_rows = input.num_rows();
+        let mut keep = Vec::with_capacity(num_rows);
+        
+        for row_idx in 0..num_rows {
+            match expr.evaluate_bool(input, row_idx) {
+                Ok(b) => keep.push(b),
+                Err(e) => {
+                    // If evaluation fails, return error instead of silently filtering
+                    // This helps catch bugs during development
+                    return Err(OpError::Exec(format!(
+                        "expression evaluation failed at row {}: {}",
+                        row_idx, e
+                    )));
+                }
+            }
         }
 
         // Filter all columns
@@ -75,7 +91,7 @@ impl Operator for Filter {
                 values: Vec::new(),
             };
             for (i, val) in input_col.values.iter().enumerate() {
-                if keep[i] {
+                if i < keep.len() && keep[i] {
                     new_col.values.push(val.clone());
                 }
             }
@@ -88,108 +104,3 @@ impl Operator for Filter {
     }
 }
 
-/// Parse a simple predicate like "age > 18" or "name == Alice"
-fn parse_simple_predicate(expr: &str) -> Result<(String, String, String), OpError> {
-    let ops = ["==", "!=", "<=", ">=", "<", ">"];
-
-    for op in &ops {
-        if let Some(pos) = expr.find(op) {
-            let col = expr[..pos].trim().to_string();
-            let lit = expr[pos + op.len()..].trim().to_string();
-            return Ok((col, op.to_string(), lit));
-        }
-    }
-
-    Err(OpError::Exec(format!("unparseable predicate: {}", expr)))
-}
-
-/// Evaluate a simple comparison predicate
-fn eval_predicate(val: &Scalar, op: &str, literal: &str) -> Result<bool, OpError> {
-    use Scalar::*;
-
-    match val {
-        Null => Ok(false), // Null comparisons are false
-        Bool(b) => {
-            let lit_bool = literal
-                .parse::<bool>()
-                .map_err(|_| OpError::Exec(format!("cannot parse '{}' as bool", literal)))?;
-            match op {
-                "==" => Ok(*b == lit_bool),
-                "!=" => Ok(*b != lit_bool),
-                _ => Err(OpError::Exec(format!("unsupported op '{}' for bool", op))),
-            }
-        }
-        I32(i) => {
-            let lit_int = literal
-                .parse::<i32>()
-                .map_err(|_| OpError::Exec(format!("cannot parse '{}' as i32", literal)))?;
-            Ok(match op {
-                "==" => *i == lit_int,
-                "!=" => *i != lit_int,
-                "<" => *i < lit_int,
-                "<=" => *i <= lit_int,
-                ">" => *i > lit_int,
-                ">=" => *i >= lit_int,
-                _ => return Err(OpError::Exec(format!("unknown op: {}", op))),
-            })
-        }
-        I64(i) => {
-            let lit_int = literal
-                .parse::<i64>()
-                .map_err(|_| OpError::Exec(format!("cannot parse '{}' as i64", literal)))?;
-            Ok(match op {
-                "==" => *i == lit_int,
-                "!=" => *i != lit_int,
-                "<" => *i < lit_int,
-                "<=" => *i <= lit_int,
-                ">" => *i > lit_int,
-                ">=" => *i >= lit_int,
-                _ => return Err(OpError::Exec(format!("unknown op: {}", op))),
-            })
-        }
-        F32(f) => {
-            let lit_float = literal
-                .parse::<f32>()
-                .map_err(|_| OpError::Exec(format!("cannot parse '{}' as f32", literal)))?;
-            Ok(match op {
-                "==" => (*f - lit_float).abs() < f32::EPSILON,
-                "!=" => (*f - lit_float).abs() >= f32::EPSILON,
-                "<" => *f < lit_float,
-                "<=" => *f <= lit_float,
-                ">" => *f > lit_float,
-                ">=" => *f >= lit_float,
-                _ => return Err(OpError::Exec(format!("unknown op: {}", op))),
-            })
-        }
-        F64(f) => {
-            let lit_float = literal
-                .parse::<f64>()
-                .map_err(|_| OpError::Exec(format!("cannot parse '{}' as f64", literal)))?;
-            Ok(match op {
-                "==" => (*f - lit_float).abs() < f64::EPSILON,
-                "!=" => (*f - lit_float).abs() >= f64::EPSILON,
-                "<" => *f < lit_float,
-                "<=" => *f <= lit_float,
-                ">" => *f > lit_float,
-                ">=" => *f >= lit_float,
-                _ => return Err(OpError::Exec(format!("unknown op: {}", op))),
-            })
-        }
-        Str(s) => {
-            // String comparisons
-            Ok(match op {
-                "==" => s == literal,
-                "!=" => s != literal,
-                "<" => s.as_str() < literal,
-                "<=" => s.as_str() <= literal,
-                ">" => s.as_str() > literal,
-                ">=" => s.as_str() >= literal,
-                _ => return Err(OpError::Exec(format!("unknown op: {}", op))),
-            })
-        }
-        Bin(_) => {
-            // Binary data comparisons not supported
-            Err(OpError::Exec("cannot filter on binary data".into()))
-        }
-    }
-}

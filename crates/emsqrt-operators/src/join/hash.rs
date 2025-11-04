@@ -87,7 +87,7 @@ impl Operator for HashJoin {
             fields.push(new_field);
         }
 
-        let out_schema = Schema { fields };
+        let out_schema = Schema::new(fields);
         Ok(OpPlan::new(out_schema, self.memory_need(0, 0)))
     }
 

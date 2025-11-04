@@ -1,4 +1,5 @@
 # EM-√ (EM-Sqrt): External-Memory ETL Engine
+
 ## **Process any dataset size with a fixed, small memory footprint.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
@@ -402,10 +403,13 @@ Contributions are welcome! Areas of particular interest:
 - Performance optimizations
 - Documentation improvements
 
+<<<<<<< HEAD
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
 
+=======
+>>>>>>> 477c699 (Fix projection pushdown bug and enhance error handling)
 ## Acknowledgments
 
 This project implements Tree Evaluation (TE) scheduling for external-memory query processing, enabling predictable memory usage in constrained environments.
@@ -415,4 +419,3 @@ This project implements Tree Evaluation (TE) scheduling for external-memory quer
 **Remember**: EM-√ trades throughput for guaranteed memory bounds. Use it when memory constraints are more important than raw speed.
 
 Repo is a dynamic work, please be aware that it will evolve and further develop over time.
-

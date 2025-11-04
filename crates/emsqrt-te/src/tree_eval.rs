@@ -200,7 +200,7 @@ pub fn plan_te(
                     order.push(TeBlock {
                         id,
                         op: *op,
-                        schema: Schema { fields: vec![] }, // sinks don't produce rows
+                        schema: Schema::new(vec![]), // sinks don't produce rows
                         deps: vec![input_block],
                         range_rows: Some((start, end)),
                     });

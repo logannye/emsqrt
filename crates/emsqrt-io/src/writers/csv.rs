@@ -30,6 +30,14 @@ impl<W: Write> CsvWriter<W> {
         }
     }
 
+    /// Create a writer that assumes headers have already been written
+    pub fn to_writer_skip_header(writer: W) -> Self {
+        Self {
+            wtr: csv_crate::Writer::from_writer(writer),
+            wrote_header: true,
+        }
+    }
+
     pub fn write_batch(&mut self, batch: &RowBatch) -> Result<()> {
         let ncols = batch.columns.len();
         if !self.wrote_header {

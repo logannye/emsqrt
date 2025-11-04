@@ -43,7 +43,7 @@ impl Operator for Project {
                 .ok_or_else(|| OpError::Schema(format!("unknown column '{name}'")))?;
             fields.push(input.fields[idx].clone());
         }
-        Ok(OpPlan::new(Schema { fields }, self.memory_need(0, 0)))
+        Ok(OpPlan::new(Schema::new(fields), self.memory_need(0, 0)))
     }
 
     fn eval_block(

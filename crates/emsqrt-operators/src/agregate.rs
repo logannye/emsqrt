@@ -27,51 +27,12 @@ pub enum AggFunc {
 }
 
 impl AggFunc {
-    /// Parse from string like "count", "COUNT(*)", "SUM(sales)", "sum:sales", "max:price".
+    /// Parse from string like "count", "sum:sales", "max:price".
     pub fn parse(s: &str) -> Result<Self, String> {
-        let s = s.trim();
-        
-        // Handle COUNT(*) case-insensitively
-        if s.to_uppercase() == "COUNT(*)" {
+        if s == "count" {
             return Ok(AggFunc::Count);
         }
-        
-        // Handle simple "count" spec
-        if s.eq_ignore_ascii_case("count") {
-            return Ok(AggFunc::Count);
-        }
-        
-        // Try parsing function(column) syntax
-        if let Some(open_idx) = s.find('(') {
-            if let Some(close_idx) = s.rfind(')') {
-                let func = s[..open_idx].trim().to_lowercase();
-                let col = s[open_idx + 1..close_idx].trim();
-                
-                // Handle COUNT(col) as COUNT(*)
-                if func == "count" {
-                    return Ok(AggFunc::Count);
-                }
-                
-                match func.as_str() {
-                    "sum" => Ok(AggFunc::Sum {
-                        column: col.to_string(),
-                    }),
-                    "min" => Ok(AggFunc::Min {
-                        column: col.to_string(),
-                    }),
-                    "max" => Ok(AggFunc::Max {
-                        column: col.to_string(),
-                    }),
-                    "avg" => Ok(AggFunc::Avg {
-                        column: col.to_string(),
-                    }),
-                    _ => Err(format!("unknown agg function: {}", func)),
-                }
-            } else {
-                Err(format!("invalid agg spec (missing closing paren): {}", s))
-            }
-        } else if let Some((func, col)) = s.split_once(':') {
-            // Handle func:column syntax as fallback
+        if let Some((func, col)) = s.split_once(':') {
             match func {
                 "sum" => Ok(AggFunc::Sum {
                     column: col.to_string(),
@@ -85,7 +46,7 @@ impl AggFunc {
                 "avg" => Ok(AggFunc::Avg {
                     column: col.to_string(),
                 }),
-                _ => Err(format!("unknown agg: {}", func)),
+                _ => Err(format!("unknown agg function: {}", func)),
             }
         } else {
             Err(format!("invalid agg spec: {}", s))
@@ -209,7 +170,7 @@ impl Operator for Aggregate {
             fields.push(agg_func.output_field());
         }
 
-        let schema = Schema { fields };
+        let schema = Schema::new(fields);
         Ok(OpPlan::new(schema, self.memory_need(0, 0)))
     }
 

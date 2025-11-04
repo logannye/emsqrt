@@ -23,16 +23,13 @@ use emsqrt_mem::guard::MemoryBudgetImpl;
 use emsqrt_mem::{Codec, SpillManager};
 
 use emsqrt_io::storage::FsStorage;
-use emsqrt_io::memory_storage::MemoryStorage;
 
 use emsqrt_operators::registry::Registry;
-use emsqrt_operators::traits::BlockStream;
 use emsqrt_operators::traits::{OpError, Operator}; // placeholder alias (Vec<RowBatch>)
 
 use emsqrt_planner::physical::PhysicalProgram;
-use emsqrt_te::tree_eval::{TeBlock, TePlan};
+use emsqrt_te::tree_eval::TePlan;
 
-use emsqrt_io::readers::csv::CsvReader;
 use emsqrt_io::writers::csv::CsvWriter;
 
 #[derive(Debug, Error)]
@@ -53,7 +50,6 @@ pub struct Engine {
     budget: MemoryBudgetImpl,
     registry: Registry,
     spill_mgr: Arc<Mutex<SpillManager>>,
-    memory_store: Arc<MemoryStorage>,
 }
 
 impl Engine {
@@ -71,13 +67,7 @@ impl Engine {
             budget: MemoryBudgetImpl::new(cap),
             registry: Registry::new(),
             spill_mgr: Arc::new(Mutex::new(spill_mgr)),
-            memory_store: Arc::new(MemoryStorage::new()),
         }
-    }
-
-    /// Get access to the memory storage (for tests to pre-populate data)
-    pub fn memory_store(&self) -> Arc<MemoryStorage> {
-        Arc::clone(&self.memory_store)
     }
 
     /// Execute a prepared `PhysicalProgram` under `TePlan` and return a manifest.
@@ -102,34 +92,38 @@ impl Engine {
             let config = &binding.config;
             let inst: Box<dyn Operator> = match key {
                 "source" => {
-                    let source_path = config
-                        .get("source")
+                    let source_uri = config.get("source")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let schema_json = config.get("schema").cloned();
+                        .ok_or_else(|| ExecError::Registry("source operator missing 'source' in config".into()))?;
+                    
+                    // Get schema from config or use default
+                    let schema: Schema = if let Some(schema_val) = config.get("schema") {
+                        serde_json::from_value(schema_val.clone())
+                            .unwrap_or_else(|_| Schema::new(vec![]))
+                    } else {
+                        Schema::new(vec![])
+                    };
+                    
                     Box::new(SourceOp {
-                        source: source_path,
-                        schema_json,
-                        memory_store: Some(Arc::clone(&self.memory_store)),
+                        source_uri: source_uri.to_string(),
+                        schema,
+                        file_position: Arc::new(Mutex::new(0)),
                     })
-                }
+                },
                 "sink" => {
-                    let destination = config
-                        .get("destination")
+                    let destination = config.get("destination")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let format = config
-                        .get("format")
+                        .unwrap_or("");
+                    let format = config.get("format")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("csv")
-                        .to_string();
+                        .unwrap_or("csv");
+                    
                     Box::new(SinkOp {
-                        destination,
-                        format,
+                        destination: destination.to_string(),
+                        format: format.to_string(),
+                        writer_initialized: std::sync::Arc::new(std::sync::Mutex::new(false)),
                     })
-                }
+                },
                 "filter" => {
                     let mut op = emsqrt_operators::filter::Filter::default();
                     if let Some(expr) = config.get("expr").and_then(|v| v.as_str()) {
@@ -148,45 +142,25 @@ impl Engine {
                     Box::new(op)
                 }
                 "map" => {
-                    let mut op = emsqrt_operators::map::Map::default();
-                    
-                    // Parse expression like "col1 AS alias1, col2 AS alias2"
-                    if let Some(expr) = config.get("expr").and_then(|v| v.as_str()) {
-                        op.renames = parse_map_expression(expr);
-                    }
-                    
-                    Box::new(op)
+                    // Map currently doesn't use config, but we could parse renames here
+                    Box::new(emsqrt_operators::map::Map::default())
                 }
                 "aggregate" => {
                     let mut op = emsqrt_operators::agregate::Aggregate::default();
                     op.spill_mgr = Some(self.spill_mgr.clone());
-                    
-                    // Parse group_by (array of strings)
+                    // Parse group_by and aggs from config if provided
                     if let Some(group_by) = config.get("group_by").and_then(|v| v.as_array()) {
                         op.group_by = group_by
                             .iter()
                             .filter_map(|v| v.as_str().map(|s| s.to_string()))
                             .collect();
                     }
-                    
-                    // Parse aggs (array of Aggregation enums serialized as JSON)
-                    if let Some(aggs_json) = config.get("aggs") {
-                        // Deserialize from JSON into Vec<Aggregation>
-                        let aggs_vec: Vec<emsqrt_core::dag::Aggregation> = serde_json::from_value(aggs_json.clone())
-                            .unwrap_or_else(|_| vec![]);
-                        
-                        // Convert Aggregation enums to strings for the operator
-                        op.aggs = aggs_vec.iter().map(|agg| {
-                            match agg {
-                                emsqrt_core::dag::Aggregation::Count => "COUNT(*)".to_string(),
-                                emsqrt_core::dag::Aggregation::Sum(col) => format!("SUM({})", col),
-                                emsqrt_core::dag::Aggregation::Avg(col) => format!("AVG({})", col),
-                                emsqrt_core::dag::Aggregation::Min(col) => format!("MIN({})", col),
-                                emsqrt_core::dag::Aggregation::Max(col) => format!("MAX({})", col),
-                            }
-                        }).collect();
+                    if let Some(aggs) = config.get("aggs").and_then(|v| v.as_array()) {
+                        op.aggs = aggs
+                            .iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect();
                     }
-                    
                     Box::new(op)
                 }
                 "sort_external" => {
@@ -256,10 +230,37 @@ impl Engine {
                 ExecError::Invalid(format!("no operator bound for op id {}", b.op))
             })?;
 
-            // In a real runtime, Unary vs Binary would be enforced by plan shape.
-            let out = op
-                .eval_block(&inputs, &self.budget)
-                .map_err(|e| ExecError::Operator(format!("{e}")))?;
+            // Calculate input sizes for error context
+            let input_rows: usize = inputs.iter().map(|batch| batch.num_rows()).sum();
+            let input_bytes: usize = inputs.iter().map(|batch| {
+                batch.columns.iter().map(|col| col.values.len() * 8).sum::<usize>()
+            }).sum();
+
+            // Build error context with operator and block information
+            let operator_name = op.name();
+            let context = format!(
+                "operator '{}' (op_id={}, block_id={}, input_rows={}, input_bytes={})",
+                operator_name, b.op.get(), b.id.get(), input_rows, input_bytes
+            );
+
+            // Try to execute with retry logic for recoverable errors
+            let out = match self.execute_block_with_retry(op.as_ref(), &inputs, &context, 3) {
+                Ok(batch) => batch,
+                Err(e) => {
+                    // Enhance error with context and suggestions
+                    let mut error_msg = format!("{}: {}", context, e);
+                    if let OpError::Schema(_) | OpError::Exec(_) = e {
+                        let suggestions = e.suggestions();
+                        if !suggestions.is_empty() {
+                            error_msg.push_str("\nSuggestions:");
+                            for suggestion in suggestions {
+                                error_msg.push_str(&format!("\n  - {}", suggestion));
+                            }
+                        }
+                    }
+                    return Err(ExecError::Operator(error_msg));
+                }
+            };
 
             // Store the result for this block (downstream deps will consume/remove it).
             results.insert(b.id.get(), out);
@@ -273,6 +274,44 @@ impl Engine {
 
         manifest = manifest.finish(now_millis(), outputs_digest);
         Ok(manifest)
+    }
+
+    /// Execute a block with retry logic for recoverable errors.
+    ///
+    /// Retries up to `max_retries` times for recoverable errors.
+    fn execute_block_with_retry(
+        &self,
+        op: &dyn Operator,
+        inputs: &[RowBatch],
+        context: &str,
+        max_retries: u32,
+    ) -> Result<RowBatch, OpError> {
+        let mut last_error = None;
+        
+        for attempt in 0..=max_retries {
+            match op.eval_block(inputs, &self.budget) {
+                Ok(batch) => return Ok(batch),
+                Err(e) => {
+                    if e.is_recoverable() && attempt < max_retries {
+                        // Exponential backoff: wait 2^attempt milliseconds
+                        let delay_ms = 2_u64.pow(attempt);
+                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                        last_error = Some(e);
+                        continue;
+                    } else {
+                        // Non-recoverable or max retries reached
+                        return Err(e.with_context(context));
+                    }
+                }
+            }
+        }
+        
+        // Should not reach here, but handle gracefully
+        match last_error {
+            Some(e) => Err(e.with_context(context)),
+            None => Err(OpError::Exec(format!("execution failed after {} retries", max_retries))
+                .with_context(context)),
+        }
     }
 }
 
@@ -293,37 +332,13 @@ fn xor_hashes(a: Hash256, b: Hash256) -> Hash256 {
     Hash256(out)
 }
 
-/// Parse a Map expression like "col1 AS alias1, col2 AS alias2" into renames HashMap
-fn parse_map_expression(expr: &str) -> std::collections::HashMap<String, String> {
-    use std::collections::HashMap;
-    
-    let mut renames = HashMap::new();
-    
-    // Split by comma to get individual rename clauses
-    for clause in expr.split(',') {
-        let clause = clause.trim();
-        
-        // Check if it contains " AS " (case-insensitive)
-        if let Some(as_pos) = clause.to_lowercase().find(" as ") {
-            let old_name = clause[..as_pos].trim().to_string();
-            let new_name = clause[as_pos + 4..].trim().to_string();
-            
-            if !old_name.is_empty() && !new_name.is_empty() {
-                renames.insert(old_name, new_name);
-            }
-        }
-        // If no AS clause, it's just a passthrough (no rename)
-    }
-    
-    renames
-}
-
 // --- placeholder source/sink operators (until real IO is wired) ---
 
 struct SourceOp {
-    source: String,
-    schema_json: Option<serde_json::Value>,
-    memory_store: Option<Arc<MemoryStorage>>,
+    source_uri: String,
+    schema: Schema,
+    // Track file position for multi-block reading
+    file_position: Arc<Mutex<usize>>,
 }
 
 impl Operator for SourceOp {
@@ -337,74 +352,164 @@ impl Operator for SourceOp {
         }
     }
     fn plan(&self, _input_schemas: &[Schema]) -> Result<emsqrt_operators::plan::OpPlan, OpError> {
-        // Decode schema from JSON if provided
-        let schema = if let Some(ref schema_json) = self.schema_json {
-            serde_json::from_value(schema_json.clone())
-                .map_err(|e| OpError::Plan(format!("schema decode: {}", e)))?
-        } else {
-            Schema { fields: vec![] }
-        };
-        
-        Ok(emsqrt_operators::plan::OpPlan {
-            output_schema: schema,
-            partitions: vec![],
-            footprint: emsqrt_operators::plan::Footprint {
-                bytes_per_row: 100,
-                overhead_bytes: 1024,
-            },
-        })
+        Err(OpError::Plan(
+            "source.plan should not be called at exec time".into(),
+        ))
     }
     fn eval_block(
         &self,
         _inputs: &[RowBatch],
         _budget: &dyn emsqrt_core::budget::MemoryBudget<Guard = emsqrt_mem::guard::BudgetGuardImpl>,
     ) -> Result<RowBatch, OpError> {
-        // Handle memory:// URIs for in-memory test data
-        if self.source.starts_with("memory://") {
-            let key = self.source.strip_prefix("memory://").unwrap_or(&self.source);
-            
-            if let Some(ref memory_store) = self.memory_store {
-                // Try to read from memory storage
-                if memory_store.contains(key) {
-                    use emsqrt_mem::Storage;
-                    let bytes = memory_store
-                        .read_range(key, 0, usize::MAX)
-                        .map_err(|e| OpError::Exec(format!("memory read: {}", e)))?;
-                    
-                    // Deserialize as RowBatch
-                    let batch: RowBatch = serde_json::from_slice(&bytes)
-                        .map_err(|e| OpError::Exec(format!("deserialize batch: {}", e)))?;
-                    
-                    return Ok(batch);
-                }
+        // Strip file:// prefix if present
+        let file_path = if self.source_uri.starts_with("file://") {
+            &self.source_uri[7..]
+        } else {
+            &self.source_uri
+        };
+        
+        // Read CSV file with provided schema
+        use std::fs::File;
+        use emsqrt_core::types::{Column, Scalar};
+        
+        let file = File::open(file_path)
+            .map_err(|e| OpError::Exec(format!("failed to open CSV file '{}': {}", file_path, e)))?;
+        
+        let mut rdr = ::csv::ReaderBuilder::new()
+            .has_headers(true)
+            .flexible(true)
+            .from_reader(file);
+        
+        // Build column index mapping from schema field names
+        let headers = rdr.headers()
+            .map_err(|e| OpError::Exec(format!("failed to read CSV headers: {}", e)))?;
+        
+        let col_indices: Vec<Option<usize>> = self.schema.fields.iter()
+            .map(|field| {
+                headers.iter().position(|h| h.trim() == field.name.trim())
+            })
+            .collect();
+        
+        // Verify all required columns are found
+        for (field, col_idx_opt) in self.schema.fields.iter().zip(col_indices.iter()) {
+            if col_idx_opt.is_none() {
+                return Err(OpError::Exec(format!(
+                    "CSV file missing required column '{}'. Available columns: {:?}",
+                    field.name,
+                    headers.iter().collect::<Vec<_>>()
+                )));
             }
-            
-            // If no data found, return empty batch
-            return Ok(RowBatch { columns: vec![] });
         }
         
-        // Parse file path (strip "file://" prefix)
-        let file_path = self.source.strip_prefix("file://").unwrap_or(&self.source);
+        // Initialize columns based on schema
+        let mut columns: Vec<Column> = self.schema.fields.iter()
+            .map(|field| Column {
+                name: field.name.clone(),
+                values: Vec::new(),
+            })
+            .collect();
         
-        // Read CSV file (schema will be inferred from headers)
-        let file = std::fs::File::open(file_path)
-            .map_err(|e| OpError::Exec(format!("open file: {}", e)))?;
-        let mut reader = CsvReader::from_reader(file, true) // assume headers
-            .map_err(|e| OpError::Exec(format!("csv reader: {}", e)))?;
+        // Read rows and populate columns
+        // Skip rows that were already read by previous blocks
+        let mut file_pos = self.file_position.lock().unwrap();
+        let skip_rows = *file_pos;
         
-        // Read all rows into a single batch (simplified for now)
-        let batch = reader
-            .next_batch(10000) // Read up to 10K rows per block
-            .map_err(|e| OpError::Exec(format!("read batch: {}", e)))?
-            .unwrap_or_else(|| RowBatch { columns: vec![] });
+        // Skip header + already-read rows
+        let mut row_count = 0;
+        let mut skipped = 0;
+        for result in rdr.records() {
+            // Skip rows that were read in previous blocks
+            if skipped < skip_rows {
+                skipped += 1;
+                continue; // Skip this row, don't process it
+            }
+            
+            // We've skipped enough - now process this row
+            
+            let record = result
+                .map_err(|e| OpError::Exec(format!("failed to read CSV record: {}", e)))?;
+            
+            for (col_idx, field) in self.schema.fields.iter().enumerate() {
+                let value = if let Some(csv_col_idx) = col_indices[col_idx] {
+                    record.get(csv_col_idx).unwrap_or("")
+                } else {
+                    ""
+                };
+                
+                // Parse value based on schema type
+                let scalar = match field.data_type {
+                    emsqrt_core::schema::DataType::Int32 => {
+                        value.parse::<i32>()
+                            .map(Scalar::I32)
+                            .unwrap_or(Scalar::Null)
+                    }
+                    emsqrt_core::schema::DataType::Int64 => {
+                        value.parse::<i64>()
+                            .map(Scalar::I64)
+                            .unwrap_or(Scalar::Null)
+                    }
+                    emsqrt_core::schema::DataType::Float32 => {
+                        value.parse::<f32>()
+                            .map(Scalar::F32)
+                            .unwrap_or(Scalar::Null)
+                    }
+                    emsqrt_core::schema::DataType::Float64 => {
+                        value.parse::<f64>()
+                            .map(Scalar::F64)
+                            .unwrap_or(Scalar::Null)
+                    }
+                    emsqrt_core::schema::DataType::Boolean => {
+                        value.parse::<bool>()
+                            .map(Scalar::Bool)
+                            .unwrap_or(Scalar::Null)
+                    }
+                    _ => Scalar::Str(value.to_string()),
+                };
+                
+                columns[col_idx].values.push(scalar);
+            }
+            
+            row_count += 1;
+            if row_count >= 10000 {
+                break; // Limit batch size
+            }
+        }
         
-        Ok(batch)
+        // Update file position for next block
+        *file_pos += row_count;
+        
+        // Ensure all columns have the same number of values
+        let num_rows = columns.first().map(|c| c.values.len()).unwrap_or(0);
+        for col in &mut columns {
+            if col.values.len() != num_rows {
+                return Err(OpError::Exec(format!(
+                    "column '{}' has {} values but expected {}",
+                    col.name, col.values.len(), num_rows
+                )));
+            }
+        }
+        
+        // If we skipped rows but didn't read any new ones, we've reached the end
+        // This is fine - return empty batch with correct column structure
+        if row_count == 0 {
+            // If we've already read some rows in previous blocks, it's OK to return empty
+            // But we still need to return columns with the correct names so downstream operators work
+            if skip_rows > 0 {
+                // Return empty batch with correct schema (columns exist but empty)
+                return Ok(RowBatch { columns });
+            }
+            // Otherwise, this is the first read and we got nothing - that's an error
+            return Err(OpError::Exec("no data in CSV file".into()));
+        }
+        
+        Ok(RowBatch { columns })
     }
 }
 
 struct SinkOp {
     destination: String,
     format: String,
+    writer_initialized: std::sync::Arc<std::sync::Mutex<bool>>,
 }
 
 impl Operator for SinkOp {
@@ -417,53 +522,81 @@ impl Operator for SinkOp {
             overhead_bytes: 0,
         }
     }
-    fn plan(&self, input_schemas: &[Schema]) -> Result<emsqrt_operators::plan::OpPlan, OpError> {
-        // Sink passes through the input schema
-        let schema = input_schemas
-            .get(0)
-            .cloned()
-            .unwrap_or(Schema { fields: vec![] });
-        
-        Ok(emsqrt_operators::plan::OpPlan {
-            output_schema: schema,
-            partitions: vec![],
-            footprint: emsqrt_operators::plan::Footprint {
-                bytes_per_row: 100,
-                overhead_bytes: 1024,
-            },
-        })
+    fn plan(&self, _input_schemas: &[Schema]) -> Result<emsqrt_operators::plan::OpPlan, OpError> {
+        Err(OpError::Plan(
+            "sink.plan should not be called at exec time".into(),
+        ))
     }
     fn eval_block(
         &self,
         inputs: &[RowBatch],
         _budget: &dyn emsqrt_core::budget::MemoryBudget<Guard = emsqrt_mem::guard::BudgetGuardImpl>,
     ) -> Result<RowBatch, OpError> {
-        let batch = inputs
-            .get(0)
-            .ok_or_else(|| OpError::Exec("sink requires input".to_string()))?;
+        let input = inputs.get(0)
+            .ok_or_else(|| OpError::Exec("sink requires one input".into()))?;
         
-        // Parse destination path (strip "file://" prefix)
-        let file_path = self
-            .destination
-            .strip_prefix("file://")
-            .unwrap_or(&self.destination);
-        
-        // Only handle CSV format for now
-        if self.format == "csv" || self.format == "memory" {
-            if self.format == "csv" {
-                // Write to CSV file
-                let file = std::fs::File::create(file_path)
-                    .map_err(|e| OpError::Exec(format!("create file: {}", e)))?;
-                let mut writer = CsvWriter::to_writer(file);
-                writer
-                    .write_batch(batch)
-                    .map_err(|e| OpError::Exec(format!("write batch: {}", e)))?;
-                // CsvWriter flushes on drop
+        // Check if input is empty (shouldn't happen, but handle gracefully)
+        if input.num_rows() == 0 {
+            // Empty batch - still write to ensure file exists, but skip if no columns
+            if input.columns.is_empty() {
+                return Ok(RowBatch { columns: vec![] });
             }
-            // For "memory" format, just pass through without writing
         }
         
-        // Return the batch (pass-through for terminal)
-        Ok(batch.clone())
+        // Strip file:// prefix if present
+        let file_path = if self.destination.starts_with("file://") {
+            &self.destination[7..]
+        } else {
+            &self.destination
+        };
+        
+        // Write based on format
+        // For CSV, we need to append to the file if it already exists (for multiple blocks)
+        match self.format.as_str() {
+            "csv" => {
+                use std::fs::OpenOptions;
+                use std::io::Write;
+                
+                let mut initialized = self.writer_initialized.lock().unwrap();
+                
+                // Determine if this is the first write or a subsequent append
+                let is_first_write = !*initialized;
+                
+                let file = if *initialized {
+                    // Append mode for subsequent blocks
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(file_path)
+                        .map_err(|e| OpError::Exec(format!("failed to open CSV file for append '{}': {}", file_path, e)))?
+                } else {
+                    // Create/truncate for first block
+                    *initialized = true;
+                    std::fs::File::create(file_path)
+                        .map_err(|e| OpError::Exec(format!("failed to create CSV file '{}': {}", file_path, e)))?
+                };
+                
+                // Only write header on first write
+                let mut writer = if is_first_write {
+                    CsvWriter::to_writer(file)
+                } else {
+                    CsvWriter::to_writer_skip_header(file)
+                };
+                
+                // Always write the batch - CsvWriter handles headers and empty batches correctly
+                // If this is the first write, header will be written
+                // If this is a subsequent write and batch is empty, nothing happens (which is fine)
+                writer.write_batch(input)
+                    .map_err(|e| OpError::Exec(format!("failed to write CSV batch with {} rows, {} cols: {}", input.num_rows(), input.columns.len(), e)))?;
+                
+                // CsvWriter already flushes in write_batch, so data should be written
+            }
+            _ => {
+                return Err(OpError::Exec(format!("unsupported sink format: {}", self.format)));
+            }
+        }
+        
+        // Return empty batch (sink is terminal)
+        Ok(RowBatch { columns: vec![] })
     }
 }

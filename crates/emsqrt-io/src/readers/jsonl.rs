@@ -30,7 +30,7 @@ impl<R: Read> JsonlReader<R> {
     pub fn from_reader(reader: R) -> Result<Self> {
         Ok(Self {
             reader: BufReader::new(reader),
-            schema: Schema { fields: vec![] },
+            schema: Schema::new(vec![]),
         })
     }
 

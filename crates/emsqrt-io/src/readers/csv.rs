@@ -41,12 +41,12 @@ impl<R: Read> CsvReader<R> {
             ));
         };
 
-        let schema = Schema {
-            fields: headers
+        let schema = Schema::new(
+            headers
                 .into_iter()
                 .map(|h| Field::new(h, DataType::Utf8, true))
                 .collect(),
-        };
+        );
 
         Ok(Self { rdr, schema })
     }
