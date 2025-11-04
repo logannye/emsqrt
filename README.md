@@ -13,7 +13,7 @@ EM-√ is an external-memory ETL/log processing engine with **hard peak-RAM guar
 - **Hard Memory Guarantees**: Never exceeds the configured memory cap (e.g., 100MB). All allocations are tracked via RAII guards.
 - **External-Memory Operators**: Sort, join, and aggregate operations automatically spill to disk when memory limits are hit.
 - **Tree Evaluation (TE) Scheduling**: Principled execution schedule that decomposes plans into blocks with bounded fan-in to control peak memory.
-- **Cloud-Ready**: Spill segments support local filesystem, S3, and GCS (planned) with checksums and compression.
+- **Cloud-Ready**: Spill segments support local filesystem with checksums and compression. S3 and GCS adapters are planned.
 - **Deterministic Execution**: Stable plan hashing for reproducibility and auditability.
 - **Memory-Constrained Environments**: Designed for edge computing, serverless, embedded systems, and containerized deployments.
 
@@ -93,31 +93,55 @@ let manifest = engine.run(&phys_prog, &te)?;
 println!("Execution completed in {}ms", manifest.finished_ms - manifest.started_ms);
 ```
 
-#### YAML DSL (Planned)
+#### YAML DSL
+
+The YAML DSL supports linear pipelines with the following operators:
 
 ```yaml
 steps:
-  - scan:
-      source: "data/logs.csv"
-      schema:
-        - { name: "ts", type: "Utf8", nullable: false }
-        - { name: "uid", type: "Utf8", nullable: false }
-        - { name: "amount", type: "Float64", nullable: true }
+  - op: scan
+    source: "data/logs.csv"
+    schema:
+      - { name: "ts", type: "Utf8", nullable: false }
+      - { name: "uid", type: "Utf8", nullable: false }
+      - { name: "amount", type: "Float64", nullable: true }
   
-  - filter:
-      expr: "amount > 1000"
+  - op: filter
+    expr: "amount > 1000"
   
-  - aggregate:
-      group_by: ["uid"]
-      aggs: ["COUNT(*)", "SUM(amount)"]
+  - op: project
+    columns: ["ts", "uid", "amount"]
   
-  - sort:
-      by: ["uid", "amount"]
-  
-  - sink:
-      destination: "results/summary.csv"
-      format: "csv"
+  - op: sink
+    destination: "results/filtered.csv"
+    format: "csv"
 ```
+
+**Note**: Currently supports `scan`, `filter`, `project`, `map`, and `sink`. Aggregate and join operators are not yet supported in YAML (use the programmatic API for these operations).
+
+#### CLI Usage
+
+The EM-√ CLI provides a convenient way to run pipelines from YAML files:
+
+```bash
+# Validate a pipeline YAML file
+emsqrt validate --pipeline examples/simple_pipeline.yaml
+
+# Show execution plan (EXPLAIN)
+emsqrt explain --pipeline examples/simple_pipeline.yaml --memory-cap 536870912
+
+# Execute a pipeline
+emsqrt run --pipeline examples/simple_pipeline.yaml
+
+# Override configuration via command-line flags
+emsqrt run \
+  --pipeline examples/simple_pipeline.yaml \
+  --memory-cap 1073741824 \
+  --spill-dir /tmp/emsqrt-spill \
+  --max-parallel 4
+```
+
+See `examples/README.md` for more details on YAML pipeline syntax.
 
 ## Examples of Practical Use Cases
 
@@ -127,9 +151,10 @@ Process large datasets in AWS Lambda, Google Cloud Functions, or Azure Functions
 
 ```rust
 // Process 100GB dataset in a 512MB Lambda
+// Note: S3 spill support is planned; currently use local filesystem
 let config = EngineConfig {
     mem_cap_bytes: 512 * 1024 * 1024, // 512MB
-    spill_dir: "s3://my-bucket/spill/".to_string(),
+    spill_dir: "/tmp/lambda-spill".to_string(),
     ..Default::default()
 };
 ```
@@ -157,9 +182,10 @@ Run customer queries with isolated memory budgets:
 
 ```rust
 // Each customer gets a memory budget
+// Note: S3 spill support is planned; currently use local filesystem
 let config = EngineConfig {
     mem_cap_bytes: customer_memory_budget,
-    spill_dir: format!("s3://platform/spill/customer-{}", customer_id),
+    spill_dir: format!("/tmp/platform-spill/customer-{}", customer_id),
     ..Default::default()
 };
 ```
@@ -193,7 +219,7 @@ emsqrt-io/        - I/O adapters (CSV, JSONL, Parquet, storage backends)
 emsqrt-operators/ - Query operators (filter, project, sort, join, aggregate)
 emsqrt-planner/   - Logical/physical planning, optimization, YAML DSL
 emsqrt-exec/      - Execution runtime, scheduler, engine
-emsqrt-tests/     - Comprehensive test suite
+emsqrt-cli/       - Command-line interface for running pipelines
 ```
 
 ### Execution Flow
@@ -272,22 +298,32 @@ cargo build -p emsqrt-exec
 ### Run Tests
 
 ```bash
-# All tests
-cargo test
+# All tests (unit tests in crates)
+cargo test --all --lib
 
-# Specific test suite
-cargo test -p emsqrt-tests --test integration_tests
+# Specific test suite (in workspace root tests/ directory)
+cargo test --test integration_tests
+cargo test --test expression_tests
+cargo test --test cost_estimation_tests
 
-# Run comprehensive test suite
+# Run comprehensive test suite (10 phases)
 ./scripts/run_all_tests.sh
 ```
 
 ### Test Coverage
 
-The project includes:
-- **Unit Tests**: SpillManager, RowBatch helpers, Memory budget, External sort
-- **Integration Tests**: Full pipeline tests (scan, filter, project, sort, aggregate, sink)
-- **E2E Tests**: End-to-end smoke tests
+The comprehensive test suite (`scripts/run_all_tests.sh`) includes 10 phases:
+
+1. **Unit Tests**: SpillManager, RowBatch helpers, Memory budget
+2. **Integration Tests**: Full pipeline tests (scan, filter, project, sort, aggregate, sink, join)
+3. **E2E Tests**: End-to-end smoke tests
+4. **Crate-Level Tests**: All library unit tests across crates
+5. **Expression Engine Tests**: Expression parsing and evaluation
+6. **Column Statistics Tests**: Statistics collection and cost estimation
+7. **Error Handling Tests**: Error context and recovery
+8. **Operator Tests**: Merge join, filter with expressions
+9. **Feature-Specific Tests**: Parquet, Arrow (when features enabled)
+10. **CLI Tests**: YAML parsing and validation
 
 ## Supported Operations
 
@@ -299,17 +335,17 @@ The project includes:
 - ✅ **Map**: Column renaming (e.g., `old_name AS new_name`)
 - ✅ **Sort**: External sort with k-way merge
 - ✅ **Aggregate**: Group-by with COUNT, SUM, AVG, MIN, MAX
-- ✅ **Join**: Hash join (Grace hash join planned)
+- ✅ **Join**: Hash join and merge join (sorted merge join for pre-sorted inputs)
 - ✅ **Sink**: Write CSV files
+- ✅ **Expression Engine**: Full SQL-like expressions with operator precedence, cross-type arithmetic, and logical operations
+- ✅ **Statistics**: Column statistics (min/max/distinct_count/null_count) for cost estimation and selectivity modeling
 
 ### Planned Features
 
 - 🔄 **Parquet I/O**: Native columnar read/write
 - 🔄 **Arrow Integration**: Columnar processing with SIMD
-- 🔄 **Cloud Storage**: S3, GCS adapters for spill segments
-- 🔄 **Merge Join**: Sorted merge join for pre-sorted inputs
-- 🔄 **Expression Engine**: Full SQL-like expressions
-- 🔄 **Statistics**: Column statistics for better cost estimation
+- 🔄 **Cloud Storage**: S3, GCS adapters for spill segments (currently filesystem only)
+- 🔄 **Grace Hash Join**: Partition-based hash join for very large datasets
 
 ## How It Works
 
@@ -373,9 +409,10 @@ emsqrt/
 │   ├── emsqrt-operators/   # Query operators
 │   ├── emsqrt-planner/     # Planning and optimization
 │   ├── emsqrt-exec/        # Execution runtime
-│   └── tests/              # Test suite
-├── tests/                  # Integration tests
-├── scripts/                # Utility scripts
+│   └── emsqrt-cli/         # Command-line interface
+├── tests/                  # Integration and unit tests (workspace root)
+├── scripts/                # Utility scripts (run_all_tests.sh)
+├── examples/               # YAML pipeline examples
 └── README.md               # This file
 ```
 
@@ -397,9 +434,10 @@ emsqrt/
 
 Contributions are welcome! Areas of particular interest:
 
-- Cloud storage adapters (S3, GCS, Azure)
+- Cloud storage adapters (S3, GCS, Azure) - placeholders exist, need implementation
 - Parquet and Arrow integration
-- Additional operators (merge join, window functions)
+- Additional operators (window functions, lateral joins)
+- YAML DSL support for aggregate and join operators
 - Performance optimizations
 - Documentation improvements
 
