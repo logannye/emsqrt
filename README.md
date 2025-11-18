@@ -10,7 +10,7 @@ EM-√ is an external-memory ETL/log processing engine with **hard peak-RAM guar
 
 ## Key Features
 
-- **Hard Memory Guarantees**: Never exceeds the configured memory cap (e.g., 100MB). All allocations are tracked via RAII guards.
+- **Hard Memory Guarantees**: Never exceeds the configured memory cap (default 512MB). All allocations are tracked via RAII guards.
 - **External-Memory Operators**: Sort, join, and aggregate operations automatically spill to disk when memory limits are hit.
 - **Tree Evaluation (TE) Scheduling**: Principled execution schedule that decomposes plans into blocks with bounded fan-in to control peak memory.
 - **Cloud-Ready**: Spill segments support local filesystem with checksums and compression. S3 and GCS adapters are planned.
@@ -82,11 +82,11 @@ let sink = L::Sink {
 let optimized = rules::optimize(sink);
 let phys_prog = lower_to_physical(&optimized);
 let work = estimate_work(&optimized, None);
-let te = plan_te(&phys_prog.plan, &work, 64 * 1024 * 1024)?; // 64MB memory cap
+let te = plan_te(&phys_prog.plan, &work, 512 * 1024 * 1024)?; // 512MB memory cap
 
 // Configure and run
 let mut config = EngineConfig::default();
-config.mem_cap_bytes = 64 * 1024 * 1024; // 64MB
+config.mem_cap_bytes = 512 * 1024 * 1024; // 512MB
 config.spill_dir = "/tmp/emsqrt-spill".to_string();
 
 let mut engine = Engine::new(config);
@@ -387,7 +387,7 @@ If `try_acquire` returns `None`, the operator must spill or partition.
 
 ### Benchmarks (Planned)
 
-- Sort 10GB with 100MB memory
+- Sort 10GB with 512MB memory
 - Join 1GB × 1GB with 50MB memory
 - Aggregate 1M groups with 20MB memory
 - TPC-H queries (Q1, Q3, Q6)
